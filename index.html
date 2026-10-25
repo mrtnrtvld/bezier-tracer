@@ -56,7 +56,8 @@ body[data-tool="edit"] .hit{pointer-events:stroke;cursor:pointer}
 body[data-tool="edit"] .hit.filled{pointer-events:visiblePainted}
 input[type=checkbox]{margin:0;accent-color:var(--accent)}
 body[data-tool="text"] #svg{cursor:text}
-.label{font-family:Figtree,system-ui,sans-serif;pointer-events:none;user-select:none;-webkit-user-select:none}
+select{font:inherit;color:var(--ink);background:var(--btn);border:1px solid var(--line);border-radius:6px;padding:4px 6px;max-width:160px}
+.label{pointer-events:none;user-select:none;-webkit-user-select:none}
 body[data-tool="edit"] .label{pointer-events:auto;cursor:move}
 body[data-tool="text"] .label{pointer-events:auto;cursor:text}
 .texted{position:absolute;transform:translate(-50%,-50%);font-family:Figtree,system-ui,sans-serif;line-height:1.1;
@@ -111,7 +112,8 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
     <label class="ctl">Fill <input type="checkbox" id="fill-on" aria-label="Fill on"></label>
     <input type="color" id="fill" value="#f2c94c" aria-label="Fill color">
   </div>
-  <div class="group" title="Size of the selected text and of new text">
+  <div class="group" title="Font and size of the selected text and of new text">
+    <select id="tfont" aria-label="Font"><option value="Figtree">Figtree</option></select>
     <label class="ctl">Size <input type="number" id="tsize" min="4" max="400" step="1" value="32" aria-label="Text size"></label>
   </div>
   <div class="group">
@@ -166,10 +168,10 @@ let cur = null;            // index of path being drawn with the pen
 let sel = { p: -1, n: -1 };
 let tool = 'pen';
 let view = { x: 0, y: 0, k: 1 };
-let texts = [];            // [{x, y, text, size, color}]  x,y is the text's center
+let texts = [];            // [{x, y, text, size, color, font}]  x,y is the text's center
 let selT = -1;             // index of the selected text, or -1
 let editT = null;          // text being typed: {i (-1 for new), x, y, size, color}
-let style = { color: '#2f6fd6', width: 3, fill: '#f2c94c', fillOn: false, textSize: 32 };
+let style = { color: '#2f6fd6', width: 3, fill: '#f2c94c', fillOn: false, textSize: 32, font: 'Figtree' };
 let hover = null, drag = null, spaceDown = false, hasImage = false;
 let lastTap = { t: 0, x: 0, y: 0 };
 let extra = []; // additional selected paths (Shift-click)
@@ -207,6 +209,8 @@ const newFill = () => style.fillOn ? style.fill : null;
 function syncFill() {
   const t = editT || (selT >= 0 && texts[selT]);
   if (document.activeElement !== $('tsize')) $('tsize').value = t ? t.size : style.textSize;
+  const fn = t ? (t.font || 'Figtree') : style.font;
+  ensureFontOption(fn); $('tfont').value = fn;
   if (t) { $('fill-on').checked = true; $('fill').value = t.color; return; }
   const list = selectedPaths(), p = list.length ? paths[list[0]] : null;
   const on = p ? !!p.fill : style.fillOn;
@@ -352,7 +356,7 @@ function render() {
   });
   texts.forEach((t, i) => {
     if (editT && editT.i === i) return; // hidden while its editor is open
-    s += `<text class="label" data-t="${i}" x="${f(t.x)}" y="${f(t.y)}" font-size="${t.size}" fill="${t.color}" text-anchor="middle" dominant-baseline="central">${esc(t.text)}</text>`;
+    s += `<text class="label" data-t="${i}" x="${f(t.x)}" y="${f(t.y)}" font-family="${esc(fontStack(t.font))}" font-size="${t.size}" fill="${t.color}" text-anchor="middle" dominant-baseline="central">${esc(t.text)}</text>`;
   });
   pathsG.innerHTML = s;
   syncFill();
@@ -529,14 +533,56 @@ function penDown(pt, e) {
   drag = { type: 'newnode', node, sx: e.clientX, sy: e.clientY };
   render();
 }
+/* ---------- fonts ---------- */
+// Common fonts across macOS, Windows and Linux; only the installed ones are listed.
+const FONT_CANDIDATES = ['Arial', 'Helvetica', 'Helvetica Neue', 'Avenir', 'Avenir Next', 'Futura', 'Gill Sans', 'Optima',
+  'Verdana', 'Tahoma', 'Trebuchet MS', 'Segoe UI', 'Calibri', 'Candara', 'Ubuntu', 'DejaVu Sans', 'Noto Sans', 'Roboto',
+  'Georgia', 'Times New Roman', 'Palatino', 'Baskerville', 'Didot', 'Garamond', 'Hoefler Text', 'Cambria', 'Rockwell',
+  'Courier New', 'Menlo', 'Monaco', 'Consolas', 'American Typewriter', 'Copperplate', 'Impact', 'Comic Sans MS',
+  'Marker Felt', 'Chalkboard SE', 'Noteworthy', 'Bradley Hand', 'Snell Roundhand', 'Zapfino', 'Brush Script MT', 'Papyrus'];
+const GENERIC = /^(system-ui|serif|sans-serif|monospace|cursive|fantasy)$/;
+const fontCss = n => GENERIC.test(n) ? n : `'${String(n).replace(/'/g, '')}'`;
+const fontStack = n => `${fontCss(n || 'Figtree')}, sans-serif`;
+// A font is installed if text set in it measures differently from the fallback fonts.
+function fontInstalled(name) {
+  const c = fontInstalled.ctx || (fontInstalled.ctx = document.createElement('canvas').getContext('2d'));
+  const sample = 'mmmmmmmmmmwwwwwlllliiiii 0123456789 AaBbQqRr';
+  return ['monospace', 'serif'].some(base => {
+    c.font = `72px ${base}`; const w0 = c.measureText(sample).width;
+    c.font = `72px ${fontCss(name)}, ${base}`; return c.measureText(sample).width !== w0;
+  });
+}
+let fontList = [], fontsQueried = false;
+const canQueryFonts = 'queryLocalFonts' in window;
+function setFontOptions(names) {
+  fontList = [...new Set(names)];
+  $('tfont').innerHTML = fontList.map(n =>
+    `<option value="${esc(n)}" style="font-family:${esc(fontStack(n))}">${esc(n === 'system-ui' ? 'System UI' : n)}</option>`).join('') +
+    (canQueryFonts && !fontsQueried ? '<option value="__more">More system fonts…</option>' : '');
+}
+// Text saved with a font that isn't in the menu yet (e.g. from the full list last session) still shows.
+function ensureFontOption(n) { if (!fontList.includes(n)) setFontOptions([...fontList, n]); }
+async function loadAllFonts() {
+  try {
+    const fonts = await window.queryLocalFonts();
+    fontsQueried = true;
+    const fams = [...new Set(fonts.map(x => x.family))].sort((a, b) => a.localeCompare(b));
+    setFontOptions(['Figtree', 'system-ui', ...fams, ...fontList]);
+  } catch (e) {
+    $('tfont').title = 'Font access was blocked. You can allow it in your browser’s site settings.';
+  }
+  syncFill();
+}
+setFontOptions(['Figtree', 'system-ui', ...FONT_CANDIDATES.filter(fontInstalled).sort((a, b) => a.localeCompare(b))]);
+
 /* ---------- text ---------- */
 const hitText = e => (e.target.dataset && e.target.dataset.t !== undefined) ? +e.target.dataset.t : -1;
 function startTextEdit(i, pt) {
   commitText();
   finishPath();
   const ed = $('texted');
-  if (i >= 0) { const t = texts[i]; editT = { i, x: t.x, y: t.y, size: t.size, color: t.color }; ed.value = t.text; }
-  else { editT = { i: -1, x: pt.x, y: pt.y, size: style.textSize, color: style.fill }; ed.value = ''; }
+  if (i >= 0) { const t = texts[i]; editT = { i, x: t.x, y: t.y, size: t.size, color: t.color, font: t.font || 'Figtree' }; ed.value = t.text; }
+  else { editT = { i: -1, x: pt.x, y: pt.y, size: style.textSize, color: style.fill, font: style.font }; ed.value = ''; }
   selT = i; sel = { p: -1, n: -1 }; extra = [];
   ed.hidden = false; placeEditor(); render();
   setTimeout(() => { ed.focus(); ed.select(); });
@@ -548,6 +594,7 @@ function placeEditor() {
   ed.style.top = (view.y + editT.y * k) + 'px';
   ed.style.fontSize = (editT.size * k) + 'px';
   ed.style.color = editT.color;
+  ed.style.fontFamily = fontStack(editT.font);
 }
 function commitText(cancel) {
   if (!editT) return;
@@ -555,11 +602,13 @@ function commitText(cancel) {
   editT = null; ed.hidden = true;
   if (!cancel) {
     if (e.i < 0) {
-      if (v.trim()) { snap(); texts.push({ x: e.x, y: e.y, text: v, size: e.size, color: e.color }); selT = texts.length - 1; }
+      if (v.trim()) { snap(); texts.push({ x: e.x, y: e.y, text: v, size: e.size, color: e.color, font: e.font }); selT = texts.length - 1; }
     } else if (!v.trim()) { snap(); texts.splice(e.i, 1); selT = -1; }
     else {
       const t = texts[e.i];
-      if (v !== t.text || e.size !== t.size || e.color !== t.color) { snap(); Object.assign(t, { text: v, size: e.size, color: e.color }); }
+      if (v !== t.text || e.size !== t.size || e.color !== t.color || e.font !== t.font) {
+        snap(); Object.assign(t, { text: v, size: e.size, color: e.color, font: e.font });
+      }
     }
   }
   render(); save();
@@ -886,6 +935,14 @@ $('tsize').oninput = e => {
   save();
 };
 $('tsize').onchange = () => { sizeUndoOpen = false; };
+$('tfont').onchange = e => {
+  const v = e.target.value;
+  if (v === '__more') { syncFill(); loadAllFonts(); return; }
+  style.font = v;
+  if (editT) { editT.font = v; placeEditor(); }
+  else if (selT >= 0 && texts[selT]) { snap(); texts[selT].font = v; render(); }
+  save();
+};
 $('zoomin').onclick = () => zoomCenter(1.25);
 $('zoomout').onclick = () => zoomCenter(0.8);
 $('fit').onclick = fit;
@@ -904,7 +961,7 @@ function buildSVG() {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${doc.w}" height="${doc.h}" viewBox="0 0 ${doc.w} ${doc.h}">\n` +
     `  <g fill="none" stroke="${style.color}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round">\n` +
     body + `\n  </g>\n` +
-    texts.map(t => `  <text x="${f(t.x)}" y="${f(t.y)}" font-family="Figtree, sans-serif" font-size="${t.size}" fill="${t.color}" text-anchor="middle" dominant-baseline="central">${esc(t.text)}</text>\n`).join('') +
+    texts.map(t => `  <text x="${f(t.x)}" y="${f(t.y)}" font-family="${esc(fontStack(t.font))}" font-size="${t.size}" fill="${t.color}" text-anchor="middle" dominant-baseline="central">${esc(t.text)}</text>\n`).join('') +
     `</svg>\n`;
 }
 $('export').onclick = () => { commitText(); finishPath(); $('out').value = buildSVG(); $('copy').textContent = 'Copy SVG'; $('dlg').showModal(); };
