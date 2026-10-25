@@ -75,6 +75,24 @@ body[data-tool="text"] .label{pointer-events:auto;cursor:text}
 .selline{fill:none;stroke:var(--accent);opacity:.6;pointer-events:none}
 .bbox{fill:none;stroke:var(--accent);pointer-events:none}
 .bcorner{fill:var(--panel);stroke:var(--accent);pointer-events:none}
+.layers{position:absolute;top:8px;right:8px;bottom:8px;width:236px;max-width:calc(100% - 16px);display:flex;flex-direction:column;
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.14);overflow:hidden;z-index:2}
+.layers[hidden]{display:none}
+.layers-head{padding:8px 10px;font-weight:600;border-bottom:1px solid var(--line)}
+.layer-list{list-style:none;margin:0;padding:4px;overflow:auto;flex:1}
+.layer{display:flex;align-items:center;gap:6px;padding:3px 6px 3px 2px;border-radius:6px;cursor:pointer;user-select:none;-webkit-user-select:none}
+.layer:hover{background:var(--btn)}
+.layer.on{background:color-mix(in srgb,var(--accent) 20%,transparent)}
+.layer.off .sw,.layer.off .lname{opacity:.4}
+.layer.drop-above{box-shadow:inset 0 2px 0 var(--accent)}
+.layer.drop-below{box-shadow:inset 0 -2px 0 var(--accent)}
+.layer .eye{border:none;background:none;padding:3px;display:grid;place-items:center;color:var(--muted)}
+.layer .eye svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.sw{width:16px;height:16px;border-radius:3px;flex:none;display:grid;place-items:center;font-weight:600;font-size:12px;line-height:1;box-sizing:border-box}
+.lname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.layers-none{color:var(--muted);padding:10px;font-size:13px}
+.layers-foot{display:flex;gap:4px;padding:6px;border-top:1px solid var(--line)}
+.layers-foot button{flex:1;padding:4px 0}
 .empty{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;color:var(--muted);text-align:center;padding:24px}
 .empty p{margin:0;max-width:34ch;font-size:15px}
 .stage.dragover::after{content:"";position:absolute;inset:10px;border:2px dashed var(--accent);border-radius:10px;pointer-events:none}
@@ -129,6 +147,7 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
   </div>
   <div class="spacer"></div>
   <div class="group">
+    <button id="layers-btn" aria-pressed="false" aria-controls="layers" title="Show the layers panel (L)">Layers</button>
     <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
     <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
     <button id="del" title="Delete selected (Delete)">Delete</button>
@@ -147,6 +166,16 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
     </g>
   </svg>
   <input id="texted" class="texted" type="text" aria-label="Text" spellcheck="false" autocomplete="off" hidden>
+  <aside class="layers" id="layers" aria-label="Layers" hidden>
+    <div class="layers-head">Layers</div>
+    <ol class="layer-list" id="layer-list"></ol>
+    <div class="layers-foot">
+      <button id="z-front" title="Bring to front (Shift+])" aria-label="Bring to front">⤒</button>
+      <button id="z-up" title="Bring forward (])" aria-label="Bring forward">↑</button>
+      <button id="z-down" title="Send backward ([)" aria-label="Send backward">↓</button>
+      <button id="z-back" title="Send to back (Shift+[)" aria-label="Send to back">⤓</button>
+    </div>
+  </aside>
   <div class="empty" id="empty"><p>Drop a sketch image here, or use Load sketch. You can also start drawing on the blank board.</p></div>
 </div>
 
@@ -191,7 +220,7 @@ const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&
 function pushUndo(s) { undoStack.push(s); if (undoStack.length > 200) undoStack.shift(); redoStack = []; }
 function snap() { pushUndo(state()); }
 function restore(s) {
-  const o = JSON.parse(s); paths = o.paths; texts = o.texts || []; cur = o.cur; selT = -1;
+  const o = JSON.parse(s); paths = o.paths; texts = o.texts || []; cur = o.cur; selT = -1; normZ();
   if (o.flip) { flip = o.flip; applyFlip(); }
   if (o.doc && (o.doc.w !== doc.w || o.doc.h !== doc.h)) { setDoc(o.doc.w, o.doc.h); fit(); }
   extra = [];
@@ -209,7 +238,41 @@ function load() {
     const o = JSON.parse(localStorage.getItem('bezier-tracer-v1') || 'null');
     if (o) { paths = o.paths || []; texts = o.texts || []; doc = o.doc || doc; style = { ...style, ...o.style }; }
   } catch (e) {}
+  normZ();
   $('color').value = style.color; $('width').value = style.width;
+}
+
+/* ---------- stacking order ---------- */
+// Paths and texts share one stacking order through their `z` value (higher = in front).
+function normZ() {
+  let m = Math.max(-1, ...paths.map(p => p.z ?? -1), ...texts.map(t => t.z ?? -1));
+  paths.forEach(p => { if (p.z == null) p.z = ++m; });
+  texts.forEach(t => { if (t.z == null) t.z = ++m; });
+}
+const nextZ = () => Math.max(-1, ...paths.map(p => p.z ?? -1), ...texts.map(t => t.z ?? -1)) + 1;
+// Every item, back to front.
+function layerItems() {
+  return [...paths.map((ref, i) => ({ k: 'p', i, ref })), ...texts.map((ref, i) => ({ k: 't', i, ref }))]
+    .sort((a, b) => a.ref.z - b.ref.z);
+}
+const isSelected = it => it.k === 'p' ? selectedPaths().includes(it.i) : it.i === selT;
+function arrange(mode) {
+  commitText();
+  const list = layerItems(), on = list.map(isSelected);
+  if (!on.some(Boolean)) return;
+  snap();
+  let out;
+  if (mode === 'front') out = [...list.filter((_, j) => !on[j]), ...list.filter((_, j) => on[j])];
+  else if (mode === 'back') out = [...list.filter((_, j) => on[j]), ...list.filter((_, j) => !on[j])];
+  else {
+    // Step each selected item past its neighbor, keeping selected groups together.
+    out = list.slice(); const s = on.slice();
+    const swap = j => { [out[j], out[j + 1]] = [out[j + 1], out[j]]; [s[j], s[j + 1]] = [s[j + 1], s[j]]; };
+    if (mode === 'up') { for (let j = out.length - 2; j >= 0; j--) if (s[j] && !s[j + 1]) swap(j); }
+    else { for (let j = 1; j < out.length; j++) if (s[j] && !s[j - 1]) swap(j - 1); }
+  }
+  out.forEach((it, j) => { it.ref.z = j; });
+  render(); save();
 }
 const newFill = () => style.fillOn ? style.fill : null;
 // Show the selected path's fill in the toolbar, or the default for new paths when nothing is selected.
@@ -251,6 +314,7 @@ function bez(a, b, t) {
 function nearestOnPaths(pt, maxD) {
   let best = null;
   paths.forEach((p, pi) => {
+    if (p.hidden) return;
     const n = p.nodes, segs = p.closed ? n.length : n.length - 1;
     for (let i = 0; i < segs; i++) {
       const a = n[i], b = n[(i + 1) % n.length];
@@ -289,7 +353,7 @@ function insertPoint(h) {
 function openEndAt(pt, hr) {
   for (let pi = paths.length - 1; pi >= 0; pi--) {
     const p = paths[pi], n = p.nodes;
-    if (p.closed || !n.length) continue;
+    if (p.closed || p.hidden || !n.length) continue;
     if (dist(pt, n[n.length - 1]) < hr) return { p: pi, end: 'last' };
     if (dist(pt, n[0]) < hr) return { p: pi, end: 'first' };
   }
@@ -363,24 +427,28 @@ function applyFlip() {
 function render() {
   const k = view.k, r = 4.5 / k, hr = 3.5 / k, lw = 1 / k;
   let s = '';
-  paths.forEach((p, i) => {
-    const d = pathD(p);
-    s += `<path class="trace" d="${d}" fill="${p.fill || 'none'}" stroke="${style.color}" stroke-width="${style.width}"/>`;
-    s += `<path class="hit${p.fill ? ' filled' : ''}" data-p="${i}" d="${d}" fill="${p.fill ? 'transparent' : 'none'}" stroke-width="${14 / k}"/>`;
-  });
-  texts.forEach((t, i) => {
-    if (editT && editT.i === i) return; // hidden while its editor is open
-    s += `<text class="label" data-t="${i}" x="${f(t.x)}" y="${f(t.y)}" font-family="${esc(fontStack(t.font))}" font-size="${t.size}" fill="${t.color}" text-anchor="middle" dominant-baseline="central">${esc(t.text)}</text>`;
+  layerItems().forEach(({ k: kind, i, ref }) => {
+    if (ref.hidden) return;
+    if (kind === 'p') {
+      const p = ref, d = pathD(p);
+      s += `<path class="trace" d="${d}" fill="${p.fill || 'none'}" stroke="${style.color}" stroke-width="${style.width}"/>`;
+      s += `<path class="hit${p.fill ? ' filled' : ''}" data-p="${i}" d="${d}" fill="${p.fill ? 'transparent' : 'none'}" stroke-width="${14 / k}"/>`;
+    } else {
+      const t = ref;
+      if (editT && editT.i === i) return; // hidden while its editor is open
+      s += `<text class="label" data-t="${i}" x="${f(t.x)}" y="${f(t.y)}" font-family="${esc(fontStack(t.font))}" font-size="${t.size}" fill="${t.color}" text-anchor="middle" dominant-baseline="central">${esc(t.text)}</text>`;
+    }
   });
   pathsG.innerHTML = s;
   syncFill();
+  renderLayers();
 
   let o = '';
   const active = cur !== null ? cur : sel.p;
 
   if (tool === 'edit') {
     paths.forEach((p, i) => {
-      if (i === active) return;
+      if (i === active || p.hidden) return;
       p.nodes.forEach(n => { o += `<circle class="anchor-dim" cx="${n.x}" cy="${n.y}" r="${2.5 / k}"/>`; });
     });
   }
@@ -410,7 +478,7 @@ function render() {
     }
   }
 
-  if (active >= 0 && paths[active]) {
+  if (active >= 0 && paths[active] && !paths[active].hidden) {
     const p = paths[active];
     p.nodes.forEach(n => {
       for (const w of ['hi', 'ho']) if (n[w]) {
@@ -426,7 +494,7 @@ function render() {
     });
   }
   if (tool === 'edit') {
-    selectedPaths().forEach(pi => { o += `<path class="selline" d="${pathD(paths[pi])}" stroke-width="${1.5 / k}"/>`; });
+    selectedPaths().filter(pi => !paths[pi].hidden).forEach(pi => { o += `<path class="selline" d="${pathD(paths[pi])}" stroke-width="${1.5 / k}"/>`; });
     const box = scaleBox();
     if (box) {
       o += `<rect class="bbox" x="${box.x0}" y="${box.y0}" width="${box.x1 - box.x0}" height="${box.y1 - box.y0}" stroke-width="${1 / k}" stroke-dasharray="${4 / k} ${3 / k}"/>`;
@@ -449,7 +517,7 @@ function render() {
 /* ---------- tools ---------- */
 const hints = {
   pen: 'Click to place a corner point; click and drag to pull out curve handles. Click the first point to close the shape. <kbd>Enter</kbd> or <kbd>Esc</kbd> finishes the path. Click on an existing path to add a point to it, or click an open path’s end to keep drawing it.',
-  edit: 'Drag a shape or text to move it. Drag points or handles to reshape. <kbd>Alt</kbd>-drag a handle to turn a smooth point into a corner. Double-click a point to toggle smooth/corner, or double-click a path to add a point. <kbd>Delete</kbd> removes the selected point, or the whole path if only the path is selected. Arrow keys nudge the selection 1 px, <kbd>Shift</kbd>+arrows 10 px. <kbd>Shift</kbd>-click paths to select several, then drag a corner of the box to scale (<kbd>Shift</kbd> stretches freely, <kbd>Alt</kbd> scales from the center).',
+  edit: 'Drag a shape or text to move it. Drag points or handles to reshape. <kbd>]</kbd> / <kbd>[</kbd> bring forward / send backward (add <kbd>Shift</kbd> for front / back); <kbd>L</kbd> shows layers. <kbd>Alt</kbd>-drag a handle to turn a smooth point into a corner. Double-click a point to toggle smooth/corner, or double-click a path to add a point. <kbd>Delete</kbd> removes the selected point, or the whole path if only the path is selected. Arrow keys nudge the selection 1 px, <kbd>Shift</kbd>+arrows 10 px. <kbd>Shift</kbd>-click paths to select several, then drag a corner of the box to scale (<kbd>Shift</kbd> stretches freely, <kbd>Alt</kbd> scales from the center).',
   circle: 'Drag from the center outward to draw a circle. It’s a regular Bézier path, so you can reshape it in Edit mode.',
   text: 'Click to add text, or click existing text to change it. <kbd>Enter</kbd> places it, <kbd>Esc</kbd> cancels. The color comes from Fill and the size from Size. In Edit mode, drag text to move it and double-click to retype it.',
   pan: 'Drag to move around. Scroll to zoom. Hold <kbd>Space</kbd> in any tool to pan.'
@@ -540,7 +608,7 @@ function penDown(pt, e) {
     if (h) { snap(); sel = { p: h.p, n: insertPoint(h) }; render(); save(); return; }
   }
   snap();
-  if (cur === null) { paths.push({ nodes: [], closed: false, fill: newFill() }); cur = paths.length - 1; }
+  if (cur === null) { paths.push({ nodes: [], closed: false, fill: newFill(), z: nextZ() }); cur = paths.length - 1; }
   const node = { x: pt.x, y: pt.y, hi: null, ho: null };
   paths[cur].nodes.push(node);
   sel = { p: cur, n: paths[cur].nodes.length - 1 };
@@ -548,12 +616,43 @@ function penDown(pt, e) {
   render();
 }
 /* ---------- fonts ---------- */
-// Common fonts across macOS, Windows and Linux; only the installed ones are listed.
-const FONT_CANDIDATES = ['Arial', 'Helvetica', 'Helvetica Neue', 'Avenir', 'Avenir Next', 'Futura', 'Gill Sans', 'Optima',
-  'Verdana', 'Tahoma', 'Trebuchet MS', 'Segoe UI', 'Calibri', 'Candara', 'Ubuntu', 'DejaVu Sans', 'Noto Sans', 'Roboto',
-  'Georgia', 'Times New Roman', 'Palatino', 'Baskerville', 'Didot', 'Garamond', 'Hoefler Text', 'Cambria', 'Rockwell',
-  'Courier New', 'Menlo', 'Monaco', 'Consolas', 'American Typewriter', 'Copperplate', 'Impact', 'Comic Sans MS',
-  'Marker Felt', 'Chalkboard SE', 'Noteworthy', 'Bradley Hand', 'Snell Roundhand', 'Zapfino', 'Brush Script MT', 'Papyrus'];
+// Browsers other than Chrome/Edge can't list fonts, so we check this list of fonts that ship
+// with macOS, Windows and Linux, plus popular downloadable ones. Only installed ones are shown.
+const FONT_CANDIDATES = (
+  // macOS
+  'Academy Engraved LET|Al Bayan|Al Nile|Al Tarikh|American Typewriter|Andale Mono|Apple Chancery|Apple SD Gothic Neo|' +
+  'Apple Symbols|AppleGothic|AppleMyungjo|Arial|Arial Black|Arial Hebrew|Arial Narrow|Arial Rounded MT Bold|Arial Unicode MS|' +
+  'Athelas|Avenir|Avenir Next|Avenir Next Condensed|Ayuthaya|Baghdad|Bangla MN|Bangla Sangam MN|Baskerville|Beirut|Big Caslon|' +
+  'Bodoni 72|Bodoni 72 Oldstyle|Bodoni 72 Smallcaps|Bodoni Ornaments|Bradley Hand|Brush Script MT|Chalkboard|Chalkboard SE|' +
+  'Chalkduster|Charter|Cochin|Comic Sans MS|Copperplate|Corsiva Hebrew|Courier|Courier New|Damascus|DecoType Naskh|' +
+  'Devanagari MT|Devanagari Sangam MN|Didot|DIN Alternate|DIN Condensed|Diwan Kufi|Diwan Thuluth|Euphemia UCAS|Farah|Farisi|' +
+  'Futura|Galvji|Geeza Pro|Geneva|Georgia|Gill Sans|Grantha Sangam MN|Gujarati MT|Gujarati Sangam MN|Gurmukhi MN|Gurmukhi MT|' +
+  'Gurmukhi Sangam MN|Heiti SC|Heiti TC|Helvetica|Helvetica Neue|Herculanum|Hiragino Maru Gothic ProN|Hiragino Mincho ProN|' +
+  'Hiragino Sans|Hiragino Sans GB|Hoefler Text|Impact|InaiMathi|Iowan Old Style|ITF Devanagari|Kailasa|Kannada MN|' +
+  'Kannada Sangam MN|Kefa|Khmer MN|Khmer Sangam MN|Kohinoor Bangla|Kohinoor Devanagari|Kohinoor Gujarati|Kohinoor Telugu|' +
+  'Kokonor|Krungthep|KufiStandardGK|Lao MN|Lao Sangam MN|Lucida Grande|Luminari|Malayalam MN|Malayalam Sangam MN|Marion|' +
+  'Marker Felt|Menlo|Microsoft Sans Serif|Mishafi|Mishafi Gold|Monaco|Mshtakan|Mukta Mahee|Muna|Myanmar MN|Myanmar Sangam MN|' +
+  'Nadeem|New Peninim MT|New York|Noteworthy|Noto Nastaliq Urdu|Optima|Oriya MN|Oriya Sangam MN|Palatino|Papyrus|Party LET|' +
+  'Phosphate|PingFang HK|PingFang SC|PingFang TC|Plantagenet Cherokee|PT Mono|PT Sans|PT Sans Caption|PT Sans Narrow|PT Serif|' +
+  'PT Serif Caption|Raanana|Rockwell|Sana|Sathu|Savoye LET|Seravek|Shree Devanagari 714|SignPainter|Silom|Sinhala MN|' +
+  'Sinhala Sangam MN|Skia|Snell Roundhand|Songti SC|Songti TC|SF Pro|SF Pro Display|SF Pro Rounded|SF Mono|STIX Two Text|' +
+  'STSong|Sukhumvit Set|Superclarendon|Symbol|Tahoma|Tamil MN|Tamil Sangam MN|Telugu MN|Telugu Sangam MN|Thonburi|Times|' +
+  'Times New Roman|Trattatello|Trebuchet MS|Verdana|Waseem|Webdings|Wingdings|Wingdings 2|Wingdings 3|Zapf Dingbats|Zapfino|' +
+  // Windows
+  'Bahnschrift|Book Antiqua|Bookman Old Style|Calibri|Cambria|Candara|Cascadia Code|Cascadia Mono|Century|Century Gothic|' +
+  'Consolas|Constantia|Corbel|Franklin Gothic Medium|Gabriola|Garamond|Gill Sans MT|Ink Free|Lucida Console|Lucida Sans|' +
+  'Lucida Sans Unicode|Malgun Gothic|Microsoft YaHei|MS Gothic|Palatino Linotype|Segoe Print|Segoe Script|Segoe UI|' +
+  'Segoe UI Variable|Sitka Text|Sylfaen|Yu Gothic|' +
+  // Linux
+  'Cantarell|DejaVu Sans|DejaVu Sans Mono|DejaVu Serif|Liberation Mono|Liberation Sans|Liberation Serif|Noto Sans|' +
+  'Noto Sans Mono|Noto Serif|Ubuntu|Ubuntu Mono|' +
+  // Popular downloads (Google Fonts, Adobe, etc.)
+  'Bebas Neue|Caveat|Cooper Std|Crimson Text|Dancing Script|DM Sans|DM Serif Display|EB Garamond|Fira Code|Fira Mono|' +
+  'Fira Sans|Futura PT|Gotham|IBM Plex Mono|IBM Plex Sans|IBM Plex Serif|Inter|JetBrains Mono|Karla|Lato|Libre Baskerville|' +
+  'Lobster|Lora|Manrope|Merriweather|Minion Pro|Montserrat|Myriad Pro|Nunito|Open Sans|Oswald|Pacifico|Permanent Marker|' +
+  'Playfair Display|Poppins|Proxima Nova|Raleway|Roboto|Roboto Mono|Roboto Slab|Rubik|Source Code Pro|Source Sans 3|' +
+  'Source Sans Pro|Source Serif Pro|Space Grotesk|Space Mono|Work Sans'
+).split('|');
 const GENERIC = /^(system-ui|serif|sans-serif|monospace|cursive|fantasy)$/;
 const fontCss = n => GENERIC.test(n) ? n : `'${String(n).replace(/'/g, '')}'`;
 const fontStack = n => `${fontCss(n || 'Figtree')}, sans-serif`;
@@ -566,13 +665,16 @@ function fontInstalled(name) {
     c.font = `72px ${fontCss(name)}, ${base}`; return c.measureText(sample).width !== w0;
   });
 }
-let fontList = [], fontsQueried = false;
+let fontList = [], fontsQueried = false, fontNote = '';
 const canQueryFonts = 'queryLocalFonts' in window;
 function setFontOptions(names) {
   fontList = [...new Set(names)];
+  let tail = '';
+  if (fontNote) tail = `<option disabled>${esc(fontNote)}</option>`;
+  else if (canQueryFonts && !fontsQueried) tail = '<option value="__more">More system fonts…</option>';
+  else if (!canQueryFonts) tail = '<option disabled>For every installed font, open this page in Chrome or Edge</option>';
   $('tfont').innerHTML = fontList.map(n =>
-    `<option value="${esc(n)}" style="font-family:${esc(fontStack(n))}">${esc(n === 'system-ui' ? 'System UI' : n)}</option>`).join('') +
-    (canQueryFonts && !fontsQueried ? '<option value="__more">More system fonts…</option>' : '');
+    `<option value="${esc(n)}" style="font-family:${esc(fontStack(n))}">${esc(n === 'system-ui' ? 'System UI' : n)}</option>`).join('') + tail;
 }
 // Text saved with a font that isn't in the menu yet (e.g. from the full list last session) still shows.
 function ensureFontOption(n) { if (!fontList.includes(n)) setFontOptions([...fontList, n]); }
@@ -583,7 +685,8 @@ async function loadAllFonts() {
     const fams = [...new Set(fonts.map(x => x.family))].sort((a, b) => a.localeCompare(b));
     setFontOptions(['Figtree', 'system-ui', ...fams, ...fontList]);
   } catch (e) {
-    $('tfont').title = 'Font access was blocked. You can allow it in your browser’s site settings.';
+    fontNote = 'Font access is blocked. Allow it in this site’s browser settings.';
+    setFontOptions(fontList);
   }
   syncFill();
 }
@@ -616,7 +719,7 @@ function commitText(cancel) {
   editT = null; ed.hidden = true;
   if (!cancel) {
     if (e.i < 0) {
-      if (v.trim()) { snap(); texts.push({ x: e.x, y: e.y, text: v, size: e.size, color: e.color, font: e.font }); selT = texts.length - 1; }
+      if (v.trim()) { snap(); texts.push({ x: e.x, y: e.y, text: v, size: e.size, color: e.color, font: e.font, z: nextZ() }); selT = texts.length - 1; }
     } else if (!v.trim()) { snap(); texts.splice(e.i, 1); selT = -1; }
     else {
       const t = texts[e.i];
@@ -661,7 +764,7 @@ function editDown(pt, e) {
   const hp = (e.target.dataset && e.target.dataset.p !== undefined) ? +e.target.dataset.p : -1;
   const keepGroup = hp >= 0 && !e.shiftKey && sel.n < 0 && selectedPaths().includes(hp);
   if (!e.shiftKey && !keepGroup) extra = [];
-  if (sel.p >= 0 && paths[sel.p]) {
+  if (sel.p >= 0 && paths[sel.p] && !paths[sel.p].hidden) {
     const ns = paths[sel.p].nodes;
     for (let i = 0; i < ns.length; i++) for (const w of ['hi', 'ho']) {
       if (ns[i][w] && dist(pt, ns[i][w]) < hr) {
@@ -671,6 +774,7 @@ function editDown(pt, e) {
   }
   const order = [...paths.keys()].sort((a, b) => (b === sel.p) - (a === sel.p));
   for (const pi of order) {
+    if (paths[pi].hidden) continue;
     const ns = paths[pi].nodes;
     for (let i = ns.length - 1; i >= 0; i--) {
       if (dist(pt, ns[i]) < hr) {
@@ -710,7 +814,7 @@ function setCircle(p, c, r) {
 }
 function circleDown(pt) {
   snap();
-  const p = { nodes: [], closed: true, fill: newFill() };
+  const p = { nodes: [], closed: true, fill: newFill(), z: nextZ(), kind: 'circle' };
   setCircle(p, pt, 0);
   paths.push(p);
   sel = { p: paths.length - 1, n: -1 };
@@ -824,7 +928,7 @@ svg.addEventListener('pointerleave', () => { if (!drag) { hover = null; render()
 function editDouble(pt) {
   const hr = 8 / view.k;
   let hit = false;
-  paths.forEach((p, pi) => p.nodes.forEach((n, i) => {
+  paths.forEach((p, pi) => !p.hidden && p.nodes.forEach((n, i) => {
     if (!hit && dist(pt, n) < hr) { snap(); toggleCorner(p, i); sel = { p: pi, n: i }; hit = true; }
   }));
   if (!hit) {
@@ -871,6 +975,11 @@ window.addEventListener('keydown', e => {
     case 't': case 'T': setTool('text'); break;
     case 'v': case 'V': setTool('edit'); break;
     case 'h': case 'H': setTool('pan'); break;
+    case 'l': case 'L': toggleLayers(); break;
+    case ']': arrange('up'); break;
+    case '[': arrange('down'); break;
+    case '}': arrange('front'); break;   // Shift+]
+    case '{': arrange('back'); break;    // Shift+[
     case '0': fit(); break;
     case '+': case '=': zoomCenter(1.25); break;
     case '-': zoomCenter(0.8); break;
@@ -989,15 +1098,108 @@ $('clear').onclick = () => {
   snap(); paths = []; texts = []; selT = -1; extra = []; cur = null; sel = { p: -1, n: -1 }; render(); save();
 };
 
+// Everything goes in one group in stacking order. Hidden items are left out.
 function buildSVG() {
-  const body = paths.filter(p => p.nodes.length > 1)
-    .map(p => `    <path${p.fill ? ` fill="${p.fill}"` : ''} d="${pathD(p)}"/>`).join('\n');
+  const body = layerItems().filter(it => !it.ref.hidden).map(({ k, ref }) => {
+    if (k === 'p') return ref.nodes.length > 1 ? `    <path${ref.fill ? ` fill="${ref.fill}"` : ''} d="${pathD(ref)}"/>` : '';
+    return `    <text x="${f(ref.x)}" y="${f(ref.y)}" stroke="none" font-family="${esc(fontStack(ref.font))}" font-size="${ref.size}" fill="${ref.color}" text-anchor="middle" dominant-baseline="central">${esc(ref.text)}</text>`;
+  }).filter(Boolean).join('\n');
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${doc.w}" height="${doc.h}" viewBox="0 0 ${doc.w} ${doc.h}">\n` +
     `  <g fill="none" stroke="${style.color}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round">\n` +
-    body + `\n  </g>\n` +
-    texts.map(t => `  <text x="${f(t.x)}" y="${f(t.y)}" font-family="${esc(fontStack(t.font))}" font-size="${t.size}" fill="${t.color}" text-anchor="middle" dominant-baseline="central">${esc(t.text)}</text>\n`).join('') +
-    `</svg>\n`;
+    body + `\n  </g>\n</svg>\n`;
 }
+
+/* ---------- layers panel ---------- */
+const EYE = '<svg viewBox="0 0 16 16"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>';
+const EYE_OFF = '<svg viewBox="0 0 16 16"><path d="M2 2l12 12M6.6 3.7A6.7 6.7 0 0 1 8 3.5C12.1 3.5 14.5 8 14.5 8a11 11 0 0 1-1.9 2.5M10 12.1a6 6 0 0 1-2 .4C3.9 12.5 1.5 8 1.5 8a11 11 0 0 1 2.6-3"/></svg>';
+function layerName(it) {
+  if (it.k === 't') return `“${it.ref.text}”`;
+  const p = it.ref, base = p.kind === 'circle' ? 'Circle' : p.closed ? 'Shape' : 'Path';
+  return `${base} ${it.i + 1}`;
+}
+let layersHtml = '';
+function renderLayers() {
+  if ($('layers').hidden) return;
+  const rows = layerItems().reverse().map(it => {
+    const r = it.ref, cls = 'layer' + (isSelected(it) ? ' on' : '') + (r.hidden ? ' off' : '');
+    const sw = it.k === 't'
+      ? `<span class="sw" style="color:${r.color};font-family:${esc(fontStack(r.font))}">T</span>`
+      : `<span class="sw" style="background:${r.fill || 'transparent'};border:2px solid ${style.color}"></span>`;
+    return `<li class="${cls}" draggable="true" data-k="${it.k}" data-i="${it.i}">` +
+      `<button class="eye" data-eye aria-label="${r.hidden ? 'Show' : 'Hide'} ${esc(layerName(it))}" title="${r.hidden ? 'Show' : 'Hide'}">${r.hidden ? EYE_OFF : EYE}</button>` +
+      `${sw}<span class="lname">${esc(layerName(it))}</span></li>`;
+  }).join('');
+  const html = rows || '<li class="layers-none">Nothing here yet. Shapes and text you add will be listed, front to back.</li>';
+  if (html !== layersHtml) { $('layer-list').innerHTML = html; layersHtml = html; }
+}
+function toggleLayers(open = $('layers').hidden) {
+  $('layers').hidden = !open;
+  $('layers-btn').setAttribute('aria-pressed', String(open));
+  style.layersOpen = open; layersHtml = ''; render(); save();
+}
+const rowItem = li => ({ k: li.dataset.k, i: +li.dataset.i });
+const refOf = ({ k, i }) => k === 'p' ? paths[i] : texts[i];
+function selectLayer(it, add) {
+  if (tool !== 'edit' && tool !== 'pan') setTool('edit'); else { commitText(); finishPath(); }
+  if (it.k === 't') { selT = it.i; sel = { p: -1, n: -1 }; extra = []; }
+  else {
+    selT = -1;
+    if (add && sel.p >= 0) {
+      const set = selectedPaths();
+      if (set.includes(it.i)) { const rest = set.filter(j => j !== it.i); sel = { p: rest.length ? rest[0] : -1, n: -1 }; extra = rest.slice(1); }
+      else { sel.n = -1; extra.push(it.i); }
+    } else { sel = { p: it.i, n: -1 }; extra = []; }
+  }
+  render();
+}
+const layerList = $('layer-list'), list = layerList;
+list.addEventListener('click', e => {
+  const li = e.target.closest('.layer'); if (!li) return;
+  const it = rowItem(li), ref = refOf(it); if (!ref) return;
+  if (e.target.closest('[data-eye]')) {
+    commitText(); snap();
+    ref.hidden = !ref.hidden;
+    if (ref.hidden) { if (it.k === 't' && selT === it.i) selT = -1; if (it.k === 'p' && selectedPaths().includes(it.i)) { sel = { p: -1, n: -1 }; extra = []; } }
+    render(); save(); return;
+  }
+  selectLayer(it, e.shiftKey);
+});
+// Drag rows to restack. Dropping on the top half of a row puts the item above it (in front).
+let dragRow = null;
+const clearDrop = () => list.querySelectorAll('.drop-above,.drop-below').forEach(n => n.classList.remove('drop-above', 'drop-below'));
+list.addEventListener('dragstart', e => {
+  const li = e.target.closest('.layer'); if (!li) return;
+  dragRow = rowItem(li); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', '');
+});
+list.addEventListener('dragover', e => {
+  const li = e.target.closest('.layer'); if (!li || !dragRow) return;
+  e.preventDefault(); clearDrop();
+  const r = li.getBoundingClientRect();
+  li.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-above' : 'drop-below');
+});
+list.addEventListener('dragleave', e => { if (!list.contains(e.relatedTarget)) clearDrop(); });
+list.addEventListener('dragend', () => { dragRow = null; clearDrop(); });
+list.addEventListener('drop', e => {
+  e.preventDefault();
+  const li = e.target.closest('.layer'); clearDrop();
+  if (!li || !dragRow) return;
+  const target = rowItem(li), src = dragRow; dragRow = null;
+  if (target.k === src.k && target.i === src.i) return;
+  const r = li.getBoundingClientRect(), above = e.clientY < r.top + r.height / 2;
+  commitText(); snap();
+  const top = layerItems().reverse(); // front first, like the panel
+  const from = top.findIndex(x => x.k === src.k && x.i === src.i), moved = top.splice(from, 1)[0];
+  let to = top.findIndex(x => x.k === target.k && x.i === target.i);
+  if (!above) to++;
+  top.splice(to, 0, moved);
+  top.forEach((x, j) => { x.ref.z = top.length - 1 - j; });
+  render(); save();
+});
+$('layers-btn').onclick = () => toggleLayers();
+$('z-front').onclick = () => arrange('front');
+$('z-up').onclick = () => arrange('up');
+$('z-down').onclick = () => arrange('down');
+$('z-back').onclick = () => arrange('back');
 $('export').onclick = () => { commitText(); finishPath(); $('out').value = buildSVG(); $('copy').textContent = 'Copy SVG'; $('dlg').showModal(); };
 $('close').onclick = () => $('dlg').close();
 $('download').onclick = () => {
@@ -1020,6 +1222,7 @@ window.addEventListener('resize', () => { applyView(); });
 load();
 setDoc(doc.w, doc.h);
 setTool('pen');
+if (style.layersOpen) toggleLayers(true);
 fit();
 })();
 </script>
