@@ -43,6 +43,7 @@ button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 label.ctl{display:flex;gap:6px;align-items:center;color:var(--muted)}
 input[type=range]{width:90px;accent-color:var(--accent)}
 input[type=number]{width:56px;font:inherit;color:var(--ink);background:var(--btn);border:1px solid var(--line);border-radius:6px;padding:4px 6px}
+input.dim{width:68px}
 input[type=color]{width:32px;height:28px;padding:0;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer}
 .spacer{flex:1}
 .stage{position:relative;flex:1;min-height:0;overflow:hidden}
@@ -116,6 +117,11 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
     <select id="tfont" aria-label="Font"><option value="Figtree">Figtree</option></select>
     <label class="ctl">Size <input type="number" id="tsize" min="4" max="400" step="1" value="32" aria-label="Text size"></label>
   </div>
+  <div class="group" title="Canvas size in pixels. Your drawing stays anchored to the top-left corner.">
+    <label class="ctl">Canvas <input type="number" id="docw" class="dim" min="1" max="20000" step="1" aria-label="Canvas width"></label>
+    <span aria-hidden="true" style="color:var(--muted)">×</span>
+    <input type="number" id="doch" class="dim" min="1" max="20000" step="1" aria-label="Canvas height">
+  </div>
   <div class="group">
     <button id="zoomout" title="Zoom out">−</button>
     <button id="fit" title="Fit to window (0)">Fit</button>
@@ -179,7 +185,7 @@ let undoStack = [], redoStack = [];
 
 const f = v => Math.round(v * 100) / 100;
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-const state = () => JSON.stringify({ paths, texts, cur, flip });
+const state = () => JSON.stringify({ paths, texts, cur, flip, doc });
 const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 function pushUndo(s) { undoStack.push(s); if (undoStack.length > 200) undoStack.shift(); redoStack = []; }
@@ -187,6 +193,7 @@ function snap() { pushUndo(state()); }
 function restore(s) {
   const o = JSON.parse(s); paths = o.paths; texts = o.texts || []; cur = o.cur; selT = -1;
   if (o.flip) { flip = o.flip; applyFlip(); }
+  if (o.doc && (o.doc.w !== doc.w || o.doc.h !== doc.h)) { setDoc(o.doc.w, o.doc.h); fit(); }
   extra = [];
   if (cur !== null && (!paths[cur] || paths[cur].closed)) cur = null;
   sel = { p: cur ?? -1, n: -1 }; render(); save();
@@ -334,8 +341,15 @@ function toDoc(e) {
 function setDoc(w, h) {
   doc = { w, h };
   board.setAttribute('width', w); board.setAttribute('height', h);
-  img.setAttribute('width', w); img.setAttribute('height', h);
+  $('docw').value = w; $('doch').value = h;
   applyFlip();
+}
+// Resize the canvas from the W × H boxes. Content stays where it is (anchored top-left).
+function resizeCanvas() {
+  const w = Math.round(+$('docw').value), h = Math.round(+$('doch').value);
+  if (!(w >= 1 && h >= 1 && w <= 20000 && h <= 20000)) { $('docw').value = doc.w; $('doch').value = doc.h; return; }
+  if (w === doc.w && h === doc.h) return;
+  snap(); setDoc(w, h); fit(); save();
 }
 let flip = { h: false, v: false };
 function applyFlip() {
@@ -873,6 +887,9 @@ function loadImage(file) {
   reader.onload = () => {
     const im = new Image();
     im.onload = () => {
+      // The sketch keeps its own size; the canvas starts out matching it.
+      if (im.naturalWidth !== doc.w || im.naturalHeight !== doc.h) snap();
+      img.setAttribute('width', im.naturalWidth); img.setAttribute('height', im.naturalHeight);
       setDoc(im.naturalWidth, im.naturalHeight);
       img.setAttribute('href', reader.result);
       hasImage = true; $('clear-sketch').disabled = false; fit(); save();
@@ -958,6 +975,8 @@ $('tfont').onchange = e => {
   else if (selT >= 0 && texts[selT]) { snap(); texts[selT].font = v; render(); }
   save();
 };
+$('docw').onchange = resizeCanvas;
+$('doch').onchange = resizeCanvas;
 $('zoomin').onclick = () => zoomCenter(1.25);
 $('zoomout').onclick = () => zoomCenter(0.8);
 $('fit').onclick = fit;
