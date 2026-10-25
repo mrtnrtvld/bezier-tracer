@@ -1,0 +1,785 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bézier tracer</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#e6e9ec; --panel:#fbfbfa; --ink:#23272c; --muted:#6a727b; --line:#d2d7dc;
+  --accent:#2f6fd6; --handle:#d6336c; --board:#ffffff; --btn:#eef0f2; --btn-on:#23272c; --btn-on-ink:#ffffff;
+  color-scheme:light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#191c20; --panel:#23272c; --ink:#e7e9eb; --muted:#9aa2ab; --line:#373d44;
+    --accent:#6ea3ff; --handle:#ff6f9c; --board:#2b3036; --btn:#2e333a; --btn-on:#e7e9eb; --btn-on-ink:#191c20;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#191c20; --panel:#23272c; --ink:#e7e9eb; --muted:#9aa2ab; --line:#373d44;
+  --accent:#6ea3ff; --handle:#ff6f9c; --board:#2b3036; --btn:#2e333a; --btn-on:#e7e9eb; --btn-on-ink:#191c20;
+  color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{height:100%}
+body{height:100%;margin:0;background:var(--bg);color:var(--ink);
+  font:14px/1.4 Figtree,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column}
+.bar{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+.group{display:flex;gap:6px;align-items:center}
+button,.filebtn{font:inherit;color:var(--ink);background:var(--btn);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer;line-height:1.3}
+button:hover,.filebtn:hover{border-color:var(--muted)}
+button:disabled{opacity:.45;cursor:default;border-color:var(--line)}
+button:focus-visible,.filebtn:focus-within,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button[aria-pressed="true"]{background:var(--btn-on);color:var(--btn-on-ink);border-color:var(--btn-on)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.filebtn input{position:absolute;width:1px;height:1px;opacity:0}
+.filebtn{position:relative}
+label.ctl{display:flex;gap:6px;align-items:center;color:var(--muted)}
+input[type=range]{width:90px;accent-color:var(--accent)}
+input[type=number]{width:56px;font:inherit;color:var(--ink);background:var(--btn);border:1px solid var(--line);border-radius:6px;padding:4px 6px}
+input[type=color]{width:32px;height:28px;padding:0;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer}
+.spacer{flex:1}
+.stage{position:relative;flex:1;min-height:0;overflow:hidden}
+#svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;display:block}
+body[data-tool="pen"] #svg,body[data-tool="circle"] #svg{cursor:crosshair}
+body[data-tool="pan"] #svg,body.panning #svg{cursor:grab}
+.board{fill:var(--board)}
+.trace{fill:none;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+.hit{fill:none;stroke:transparent;pointer-events:none}
+body[data-tool="edit"] .hit{pointer-events:stroke;cursor:pointer}
+.preview{fill:none;stroke:var(--accent);stroke-dasharray:4 4;opacity:.7;pointer-events:none;vector-effect:non-scaling-stroke}
+.hline{stroke:var(--handle);pointer-events:none}
+.hdot{fill:var(--panel);stroke:var(--handle);pointer-events:none}
+.anchor{fill:var(--panel);stroke:var(--accent);pointer-events:none}
+.anchor.on{fill:var(--accent)}
+.anchor.closing{fill:var(--handle);stroke:var(--handle)}
+.anchor-dim{fill:var(--accent);opacity:.55;pointer-events:none}
+.insert{fill:var(--panel);stroke:var(--accent);pointer-events:none}
+.selline{fill:none;stroke:var(--accent);opacity:.6;pointer-events:none}
+.bbox{fill:none;stroke:var(--accent);pointer-events:none}
+.bcorner{fill:var(--panel);stroke:var(--accent);pointer-events:none}
+.empty{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;color:var(--muted);text-align:center;padding:24px}
+.empty p{margin:0;max-width:34ch;font-size:15px}
+.stage.dragover::after{content:"";position:absolute;inset:10px;border:2px dashed var(--accent);border-radius:10px;pointer-events:none}
+.hint{padding:6px 12px;font-size:13px;color:var(--muted);background:var(--panel);border-top:1px solid var(--line)}
+kbd{font:inherit;font-size:12px;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;background:var(--btn);color:var(--ink)}
+dialog{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);padding:16px;width:min(680px,calc(100vw - 32px))}
+dialog::backdrop{background:rgba(0,0,0,.4)}
+dialog h2{margin:0 0 10px;font-size:16px;font-weight:600}
+dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;resize:vertical}
+.dlg-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
+@media (max-width:640px){.hint{display:none}input[type=range]{width:70px}}
+</style>
+</head>
+<body data-tool="pen">
+
+<div class="bar">
+  <div class="group" role="group" aria-label="Tools">
+    <button id="t-pen" aria-pressed="true" title="Pen (P)">Pen</button>
+    <button id="t-circle" aria-pressed="false" title="Circle (C)">Circle</button>
+    <button id="t-edit" aria-pressed="false" title="Edit (V)">Edit</button>
+    <button id="t-pan" aria-pressed="false" title="Pan (H, or hold Space)">Pan</button>
+  </div>
+  <div class="group">
+    <label class="filebtn">Load sketch<input type="file" id="file" accept="image/*"></label>
+    <label class="ctl">Sketch <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.5" aria-label="Sketch opacity"></label>
+    <button id="flip-h" aria-pressed="false" title="Flip sketch and drawing horizontally">Flip ↔</button>
+    <button id="flip-v" aria-pressed="false" title="Flip sketch and drawing vertically">Flip ↕</button>
+    <button id="clear-sketch" title="Remove the sketch image (your paths stay)" disabled>Remove sketch</button>
+  </div>
+  <div class="group">
+    <label class="ctl">Stroke <input type="color" id="color" value="#2f6fd6" aria-label="Stroke color"></label>
+    <input type="number" id="width" min="0.5" max="40" step="0.5" value="3" aria-label="Stroke width">
+  </div>
+  <div class="group">
+    <button id="zoomout" title="Zoom out">−</button>
+    <button id="fit" title="Fit to window (0)">Fit</button>
+    <button id="zoomin" title="Zoom in">+</button>
+  </div>
+  <div class="spacer"></div>
+  <div class="group">
+    <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
+    <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
+    <button id="del" title="Delete selected (Delete)">Delete</button>
+    <button id="clear" title="Remove all paths">Clear</button>
+    <button id="export" class="primary">Export SVG</button>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+  <svg id="svg" xmlns="http://www.w3.org/2000/svg">
+    <g id="world">
+      <rect class="board" id="board" x="0" y="0" width="1000" height="750"/>
+      <image id="img" x="0" y="0" opacity="0.5" preserveAspectRatio="none"/>
+      <g id="paths"></g>
+      <g id="overlay"></g>
+    </g>
+  </svg>
+  <div class="empty" id="empty"><p>Drop a sketch image here, or use Load sketch. You can also start drawing on the blank board.</p></div>
+</div>
+
+<div class="hint" id="hint"></div>
+
+<dialog id="dlg">
+  <h2>Your traced SVG</h2>
+  <textarea id="out" readonly spellcheck="false"></textarea>
+  <div class="dlg-actions">
+    <button id="download" class="primary">Download .svg</button>
+    <button id="copy">Copy SVG</button>
+    <button id="close">Close</button>
+  </div>
+</dialog>
+
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+const svg = $('svg'), world = $('world'), board = $('board'), img = $('img');
+const pathsG = $('paths'), overlayG = $('overlay'), stage = $('stage');
+
+let doc = { w: 1000, h: 750 };
+let paths = [];            // [{closed, nodes:[{x,y,hi,ho,corner}]}]
+let cur = null;            // index of path being drawn with the pen
+let sel = { p: -1, n: -1 };
+let tool = 'pen';
+let view = { x: 0, y: 0, k: 1 };
+let style = { color: '#2f6fd6', width: 3 };
+let hover = null, drag = null, spaceDown = false, hasImage = false;
+let lastTap = { t: 0, x: 0, y: 0 };
+let extra = []; // additional selected paths (Shift-click)
+let undoStack = [], redoStack = [];
+
+const f = v => Math.round(v * 100) / 100;
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const state = () => JSON.stringify({ paths, cur, flip });
+
+function pushUndo(s) { undoStack.push(s); if (undoStack.length > 200) undoStack.shift(); redoStack = []; }
+function snap() { pushUndo(state()); }
+function restore(s) {
+  const o = JSON.parse(s); paths = o.paths; cur = o.cur;
+  if (o.flip) { flip = o.flip; applyFlip(); }
+  extra = [];
+  if (cur !== null && (!paths[cur] || paths[cur].closed)) cur = null;
+  sel = { p: cur ?? -1, n: -1 }; render(); save();
+}
+function undo() { if (!undoStack.length) return; redoStack.push(state()); restore(undoStack.pop()); }
+function redo() { if (!redoStack.length) return; undoStack.push(state()); restore(redoStack.pop()); }
+
+function save() {
+  try { localStorage.setItem('bezier-tracer-v1', JSON.stringify({ paths, doc, style })); } catch (e) {}
+}
+function load() {
+  try {
+    const o = JSON.parse(localStorage.getItem('bezier-tracer-v1') || 'null');
+    if (o) { paths = o.paths || []; doc = o.doc || doc; style = o.style || style; }
+  } catch (e) {}
+  $('color').value = style.color; $('width').value = style.width;
+}
+
+/* ---------- geometry ---------- */
+function seg(a, b) {
+  if (!a.ho && !b.hi) return `L${f(b.x)} ${f(b.y)}`;
+  const c1 = a.ho || a, c2 = b.hi || b;
+  return `C${f(c1.x)} ${f(c1.y)} ${f(c2.x)} ${f(c2.y)} ${f(b.x)} ${f(b.y)}`;
+}
+function pathD(p) {
+  const n = p.nodes; if (!n.length) return '';
+  let d = `M${f(n[0].x)} ${f(n[0].y)}`;
+  for (let i = 1; i < n.length; i++) d += seg(n[i - 1], n[i]);
+  if (p.closed && n.length > 1) d += seg(n[n.length - 1], n[0]) + 'Z';
+  return d;
+}
+
+/* ---------- point insertion ---------- */
+function lerp(a, b, t) { return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }; }
+function bez(a, b, t) {
+  const p1 = a.ho || a, p2 = b.hi || b, u = 1 - t;
+  return {
+    x: u*u*u*a.x + 3*u*u*t*p1.x + 3*u*t*t*p2.x + t*t*t*b.x,
+    y: u*u*u*a.y + 3*u*u*t*p1.y + 3*u*t*t*p2.y + t*t*t*b.y
+  };
+}
+function nearestOnPaths(pt, maxD) {
+  let best = null;
+  paths.forEach((p, pi) => {
+    const n = p.nodes, segs = p.closed ? n.length : n.length - 1;
+    for (let i = 0; i < segs; i++) {
+      const a = n[i], b = n[(i + 1) % n.length];
+      let bt = 0, bd = Infinity;
+      for (let s = 0; s <= 48; s++) { const t = s / 48, d = dist(pt, bez(a, b, t)); if (d < bd) { bd = d; bt = t; } }
+      let step = 1 / 48;
+      for (let r = 0; r < 12; r++) {
+        step /= 2;
+        for (const t of [bt - step, bt + step]) {
+          if (t < 0 || t > 1) continue;
+          const d = dist(pt, bez(a, b, t)); if (d < bd) { bd = d; bt = t; }
+        }
+      }
+      if (bd < maxD && (!best || bd < best.d)) best = { p: pi, i, t: bt, d: bd };
+    }
+  });
+  return best;
+}
+// Split the segment with de Casteljau so the curve keeps its exact shape.
+function insertPoint(h) {
+  const n = paths[h.p].nodes, a = n[h.i], b = n[(h.i + 1) % n.length], t = h.t;
+  let node;
+  if (!a.ho && !b.hi) {
+    const q = lerp(a, b, t); node = { x: q.x, y: q.y, hi: null, ho: null };
+  } else {
+    const p1 = a.ho || a, p2 = b.hi || b;
+    const p01 = lerp(a, p1, t), p12 = lerp(p1, p2, t), p23 = lerp(p2, b, t);
+    const p012 = lerp(p01, p12, t), p123 = lerp(p12, p23, t), m = lerp(p012, p123, t);
+    if (a.ho) a.ho = p01;
+    if (b.hi) b.hi = p23;
+    node = { x: m.x, y: m.y, hi: p012, ho: p123 };
+  }
+  n.splice(h.i + 1, 0, node);
+  return h.i + 1;
+}
+function openEndAt(pt, hr) {
+  for (let pi = paths.length - 1; pi >= 0; pi--) {
+    const p = paths[pi], n = p.nodes;
+    if (p.closed || !n.length) continue;
+    if (dist(pt, n[n.length - 1]) < hr) return { p: pi, end: 'last' };
+    if (dist(pt, n[0]) < hr) return { p: pi, end: 'first' };
+  }
+  return null;
+}
+function selectedPaths() {
+  if (sel.p < 0 || !paths[sel.p]) return [];
+  return [...new Set([sel.p, ...extra])].filter(i => paths[i]);
+}
+function boundsOf(list) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const add = q => { if (q.x < x0) x0 = q.x; if (q.x > x1) x1 = q.x; if (q.y < y0) y0 = q.y; if (q.y > y1) y1 = q.y; };
+  list.forEach(pi => {
+    const n = paths[pi].nodes, segs = paths[pi].closed ? n.length : n.length - 1;
+    n.forEach(add);
+    for (let i = 0; i < segs; i++) for (let s = 1; s < 16; s++) add(bez(n[i], n[(i + 1) % n.length], s / 16));
+  });
+  return x0 === Infinity ? null : { x0, y0, x1, y1 };
+}
+// The scale box appears in Edit mode when whole paths (not a single point) are selected.
+function scaleBox() {
+  if (tool !== 'edit' || sel.n >= 0) return null;
+  const list = selectedPaths();
+  return list.length ? boundsOf(list) : null;
+}
+function reversePath(p) {
+  p.nodes.reverse();
+  p.nodes.forEach(n => { const h = n.hi; n.hi = n.ho; n.ho = h; });
+}
+
+/* ---------- view ---------- */
+function applyView() { world.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`); }
+function fit() {
+  const r = stage.getBoundingClientRect();
+  const k = Math.min(r.width / doc.w, r.height / doc.h) * 0.92;
+  view = { k, x: (r.width - doc.w * k) / 2, y: (r.height - doc.h * k) / 2 };
+  applyView(); render();
+}
+function zoomAt(mx, my, factor) {
+  const nk = Math.min(40, Math.max(0.05, view.k * factor));
+  view.x = mx - (mx - view.x) * (nk / view.k);
+  view.y = my - (my - view.y) * (nk / view.k);
+  view.k = nk; applyView(); render();
+}
+function toDoc(e) {
+  const r = svg.getBoundingClientRect();
+  return { x: (e.clientX - r.left - view.x) / view.k, y: (e.clientY - r.top - view.y) / view.k };
+}
+function setDoc(w, h) {
+  doc = { w, h };
+  board.setAttribute('width', w); board.setAttribute('height', h);
+  img.setAttribute('width', w); img.setAttribute('height', h);
+  applyFlip();
+}
+let flip = { h: false, v: false };
+function applyFlip() {
+  img.setAttribute('transform',
+    `translate(${flip.h ? doc.w : 0} ${flip.v ? doc.h : 0}) scale(${flip.h ? -1 : 1} ${flip.v ? -1 : 1})`);
+  $('flip-h').setAttribute('aria-pressed', String(flip.h));
+  $('flip-v').setAttribute('aria-pressed', String(flip.v));
+}
+
+/* ---------- render ---------- */
+function render() {
+  const k = view.k, r = 4.5 / k, hr = 3.5 / k, lw = 1 / k;
+  let s = '';
+  paths.forEach((p, i) => {
+    const d = pathD(p);
+    s += `<path class="trace" d="${d}" stroke="${style.color}" stroke-width="${style.width}"/>`;
+    s += `<path class="hit" data-p="${i}" d="${d}" stroke-width="${14 / k}"/>`;
+  });
+  pathsG.innerHTML = s;
+
+  let o = '';
+  const active = cur !== null ? cur : sel.p;
+
+  if (tool === 'edit') {
+    paths.forEach((p, i) => {
+      if (i === active) return;
+      p.nodes.forEach(n => { o += `<circle class="anchor-dim" cx="${n.x}" cy="${n.y}" r="${2.5 / k}"/>`; });
+    });
+  }
+
+  if (tool === 'pen' && cur === null && hover && !drag) {
+    const end = openEndAt(hover, 8 / k);
+    if (end) {
+      const n = paths[end.p].nodes, q = end.end === 'first' ? n[0] : n[n.length - 1];
+      o += `<circle class="insert" cx="${q.x}" cy="${q.y}" r="${7 / k}" stroke-width="${1.5 / k}"/>`;
+    } else {
+      const h = nearestOnPaths(hover, 6 / k);
+      if (h) {
+        const n = paths[h.p].nodes, q = bez(n[h.i], n[(h.i + 1) % n.length], h.t);
+        o += `<circle class="insert" cx="${q.x}" cy="${q.y}" r="${4 / k}" stroke-width="${1.5 / k}"/>`;
+      }
+    }
+  }
+
+  let closing = false;
+  if (tool === 'pen' && cur !== null && hover && !drag) {
+    const p = paths[cur], last = p.nodes[p.nodes.length - 1];
+    if (last) {
+      closing = p.nodes.length > 2 && dist(hover, p.nodes[0]) < 8 / k;
+      const end = closing ? p.nodes[0] : hover;
+      const c1 = last.ho || last, c2 = closing && end.hi ? end.hi : end;
+      o += `<path class="preview" d="M${last.x} ${last.y}C${c1.x} ${c1.y} ${c2.x} ${c2.y} ${end.x} ${end.y}"/>`;
+    }
+  }
+
+  if (active >= 0 && paths[active]) {
+    const p = paths[active];
+    p.nodes.forEach(n => {
+      for (const w of ['hi', 'ho']) if (n[w]) {
+        o += `<line class="hline" x1="${n.x}" y1="${n.y}" x2="${n[w].x}" y2="${n[w].y}" stroke-width="${lw}"/>`;
+        o += `<circle class="hdot" cx="${n[w].x}" cy="${n[w].y}" r="${hr}" stroke-width="${lw}"/>`;
+      }
+    });
+    p.nodes.forEach((n, i) => {
+      let cls = 'anchor';
+      if (i === sel.n && active === sel.p) cls += ' on';
+      if (closing && i === 0) cls += ' closing';
+      o += `<rect class="${cls}" x="${n.x - r}" y="${n.y - r}" width="${2 * r}" height="${2 * r}" stroke-width="${1.5 / k}"/>`;
+    });
+  }
+  if (tool === 'edit') {
+    selectedPaths().forEach(pi => { o += `<path class="selline" d="${pathD(paths[pi])}" stroke-width="${1.5 / k}"/>`; });
+    const box = scaleBox();
+    if (box) {
+      o += `<rect class="bbox" x="${box.x0}" y="${box.y0}" width="${box.x1 - box.x0}" height="${box.y1 - box.y0}" stroke-width="${1 / k}" stroke-dasharray="${4 / k} ${3 / k}"/>`;
+      const cs = 4.5 / k;
+      for (const [x, y] of [[box.x0, box.y0], [box.x1, box.y0], [box.x1, box.y1], [box.x0, box.y1]])
+        o += `<rect class="bcorner" x="${x - cs}" y="${y - cs}" width="${2 * cs}" height="${2 * cs}" stroke-width="${1.5 / k}"/>`;
+    }
+  }
+  overlayG.innerHTML = o;
+  $('empty').style.display = (hasImage || paths.length) ? 'none' : '';
+}
+
+/* ---------- tools ---------- */
+const hints = {
+  pen: 'Click to place a corner point; click and drag to pull out curve handles. Click the first point to close the shape. <kbd>Enter</kbd> or <kbd>Esc</kbd> finishes the path. Click on an existing path to add a point to it, or click an open path’s end to keep drawing it.',
+  edit: 'Drag points or handles. <kbd>Alt</kbd>-drag a handle to turn a smooth point into a corner. Double-click a point to toggle smooth/corner, or double-click a path to add a point. <kbd>Delete</kbd> removes the selected point, or the whole path if only the path is selected. Arrow keys nudge the selection 1 px, <kbd>Shift</kbd>+arrows 10 px. <kbd>Shift</kbd>-click paths to select several, then drag a corner of the box to scale (<kbd>Shift</kbd> stretches freely, <kbd>Alt</kbd> scales from the center).',
+  circle: 'Drag from the center outward to draw a circle. It’s a regular Bézier path, so you can reshape it in Edit mode.',
+  pan: 'Drag to move around. Scroll to zoom. Hold <kbd>Space</kbd> in any tool to pan.'
+};
+function setTool(t) {
+  finishPath();
+  tool = t; document.body.dataset.tool = t;
+  for (const n of ['pen', 'circle', 'edit', 'pan']) $('t-' + n).setAttribute('aria-pressed', String(n === t));
+  $('hint').innerHTML = hints[t];
+  render();
+}
+function finishPath() {
+  if (cur === null) return;
+  if (paths[cur] && paths[cur].nodes.length < 2) { paths.splice(cur, 1); sel = { p: -1, n: -1 }; }
+  cur = null; save(); render();
+}
+function removePath(i) {
+  extra = extra.filter(j => j !== i).map(j => j > i ? j - 1 : j);
+  paths.splice(i, 1);
+  if (cur === i) cur = null; else if (cur !== null && cur > i) cur--;
+  sel = { p: -1, n: -1 };
+}
+// Move the selected point, or the whole selected path. A burst of nudges is one undo step.
+let lastNudge = 0;
+function nudge(dx, dy) {
+  const now = performance.now();
+  if (now - lastNudge > 700) snap();
+  lastNudge = now;
+  const p = paths[sel.p];
+  const ns = sel.n >= 0 && p.nodes[sel.n] ? [p.nodes[sel.n]] : selectedPaths().flatMap(i => paths[i].nodes);
+  ns.forEach(n => {
+    n.x += dx; n.y += dy;
+    if (n.hi) { n.hi.x += dx; n.hi.y += dy; }
+    if (n.ho) { n.ho.x += dx; n.ho.y += dy; }
+  });
+  render(); save();
+}
+function deleteSelected() {
+  if (sel.p < 0 || !paths[sel.p]) return;
+  snap();
+  const p = paths[sel.p];
+  if (sel.n >= 0) {
+    p.nodes.splice(sel.n, 1);
+    if (p.nodes.length < 2 && cur !== sel.p) removePath(sel.p);
+    else if (p.nodes.length < 3) p.closed = false;
+    sel.n = -1;
+  } else { selectedPaths().sort((a, b) => b - a).forEach(removePath); extra = []; }
+  render(); save();
+}
+function toggleCorner(p, i) {
+  const n = p.nodes[i];
+  const tiny = h => !h || dist(h, n) < 1;
+  if (!tiny(n.hi) || !tiny(n.ho)) { n.hi = n.ho = null; n.corner = false; return; }
+  const len = p.nodes.length;
+  const prev = p.nodes[i - 1] || (p.closed ? p.nodes[len - 1] : null);
+  const next = p.nodes[i + 1] || (p.closed ? p.nodes[0] : null);
+  const a = prev || n, b = next || n;
+  let dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1;
+  dx /= L; dy /= L;
+  const lin = prev ? dist(prev, n) / 3 : 30, lout = next ? dist(next, n) / 3 : 30;
+  n.hi = { x: n.x - dx * lin, y: n.y - dy * lin };
+  n.ho = { x: n.x + dx * lout, y: n.y + dy * lout };
+  n.corner = false;
+}
+
+/* ---------- pointer ---------- */
+function penDown(pt, e) {
+  const hr = 8 / view.k;
+  if (cur !== null) {
+    const p = paths[cur];
+    if (p.nodes.length > 2 && dist(pt, p.nodes[0]) < hr) {
+      snap(); p.closed = true; sel = { p: cur, n: 0 }; cur = null; render(); save(); return;
+    }
+  }
+  if (cur === null) {
+    const end = openEndAt(pt, hr);
+    if (end) {
+      snap();
+      const p = paths[end.p];
+      if (end.end === 'first') reversePath(p);
+      cur = end.p; sel = { p: cur, n: p.nodes.length - 1 };
+      render(); return;
+    }
+    const h = nearestOnPaths(pt, 6 / view.k);
+    if (h) { snap(); sel = { p: h.p, n: insertPoint(h) }; render(); save(); return; }
+  }
+  snap();
+  if (cur === null) { paths.push({ nodes: [], closed: false }); cur = paths.length - 1; }
+  const node = { x: pt.x, y: pt.y, hi: null, ho: null };
+  paths[cur].nodes.push(node);
+  sel = { p: cur, n: paths[cur].nodes.length - 1 };
+  drag = { type: 'newnode', node, sx: e.clientX, sy: e.clientY };
+  render();
+}
+function editDown(pt, e) {
+  const hr = 8 / view.k;
+  const box = scaleBox();
+  if (box) {
+    const cs = [[box.x0, box.y0], [box.x1, box.y0], [box.x1, box.y1], [box.x0, box.y1]];
+    for (let i = 0; i < 4; i++) {
+      const c = { x: cs[i][0], y: cs[i][1] };
+      if (dist(pt, c) < hr) {
+        const o = cs[(i + 2) % 4], list = selectedPaths();
+        drag = {
+          type: 'scale', pre: state(), corner: c, opp: { x: o[0], y: o[1] },
+          center: { x: (box.x0 + box.x1) / 2, y: (box.y0 + box.y1) / 2 },
+          list, orig: list.map(pi => JSON.parse(JSON.stringify(paths[pi].nodes)))
+        };
+        return;
+      }
+    }
+  }
+  if (!e.shiftKey) extra = [];
+  if (sel.p >= 0 && paths[sel.p]) {
+    const ns = paths[sel.p].nodes;
+    for (let i = 0; i < ns.length; i++) for (const w of ['hi', 'ho']) {
+      if (ns[i][w] && dist(pt, ns[i][w]) < hr) {
+        sel.n = i; drag = { type: 'handle', node: ns[i], which: w, pre: state() }; render(); return;
+      }
+    }
+  }
+  const order = [...paths.keys()].sort((a, b) => (b === sel.p) - (a === sel.p));
+  for (const pi of order) {
+    const ns = paths[pi].nodes;
+    for (let i = ns.length - 1; i >= 0; i--) {
+      if (dist(pt, ns[i]) < hr) {
+        sel = { p: pi, n: i }; drag = { type: 'anchor', node: ns[i], last: pt, pre: state() }; render(); return;
+      }
+    }
+  }
+  if (e.target.dataset && e.target.dataset.p !== undefined) {
+    const i = +e.target.dataset.p;
+    if (e.shiftKey && sel.p >= 0) {
+      const set = selectedPaths();
+      if (set.includes(i)) {
+        const rest = set.filter(j => j !== i);
+        sel = { p: rest.length ? rest[0] : -1, n: -1 }; extra = rest.slice(1);
+      } else { sel.n = -1; extra.push(i); }
+    } else sel = { p: i, n: -1 };
+    render(); return;
+  }
+  if (!e.shiftKey) sel = { p: -1, n: -1 };
+  render();
+}
+
+/* ---------- circles ---------- */
+const KAPPA = 0.5522847498; // handle length for a 4-segment circle
+function setCircle(p, c, r) {
+  const K = KAPPA * r, x = c.x, y = c.y;
+  p.nodes = [
+    { x: x + r, y,        hi: { x: x + r, y: y - K }, ho: { x: x + r, y: y + K } },
+    { x,        y: y + r, hi: { x: x + K, y: y + r }, ho: { x: x - K, y: y + r } },
+    { x: x - r, y,        hi: { x: x - r, y: y + K }, ho: { x: x - r, y: y - K } },
+    { x,        y: y - r, hi: { x: x - K, y: y - r }, ho: { x: x + K, y: y - r } }
+  ];
+  p.closed = true;
+}
+function circleDown(pt) {
+  snap();
+  const p = { nodes: [], closed: true };
+  setCircle(p, pt, 0);
+  paths.push(p);
+  sel = { p: paths.length - 1, n: -1 };
+  drag = { type: 'circle', p: paths.length - 1, c: pt };
+  render();
+}
+
+svg.addEventListener('pointerdown', e => {
+  svg.setPointerCapture(e.pointerId);
+  const pt = toDoc(e);
+  if (e.button === 1 || spaceDown || tool === 'pan') {
+    drag = { type: 'pan', sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y }; e.preventDefault(); return;
+  }
+  if (e.button !== 0) return;
+  if (tool === 'edit') {
+    // Detect double-clicks ourselves: the browser's dblclick is unreliable here
+    // because the element under the pointer is redrawn on every click.
+    const now = performance.now();
+    const dbl = now - lastTap.t < 400 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 6;
+    lastTap = dbl ? { t: 0, x: 0, y: 0 } : { t: now, x: e.clientX, y: e.clientY };
+    if (dbl) { drag = null; editDouble(pt); return; }
+  }
+  if (tool === 'pen') { extra = []; penDown(pt, e); }
+  else if (tool === 'circle') { extra = []; circleDown(pt); }
+  else editDown(pt, e);
+});
+
+svg.addEventListener('pointermove', e => {
+  const pt = toDoc(e); hover = pt;
+  if (!drag) { if (tool === 'pen') render(); return; }
+  if (drag.pre && !drag.moved) { pushUndo(drag.pre); drag.moved = true; }
+  const n = drag.node;
+  switch (drag.type) {
+    case 'scale': {
+      const a = e.altKey ? drag.center : drag.opp, c = drag.corner;
+      const vx = c.x - a.x, vy = c.y - a.y;
+      let sx, sy;
+      if (e.shiftKey) {
+        sx = vx ? (pt.x - a.x) / vx : 1; sy = vy ? (pt.y - a.y) / vy : 1;
+      } else {
+        const L = vx * vx + vy * vy;
+        sx = sy = L ? ((pt.x - a.x) * vx + (pt.y - a.y) * vy) / L : 1;
+      }
+      sx = Math.max(0.01, sx); sy = Math.max(0.01, sy);
+      const tf = q => q && { x: a.x + (q.x - a.x) * sx, y: a.y + (q.y - a.y) * sy };
+      drag.list.forEach((pi, k) => {
+        paths[pi].nodes = drag.orig[k].map(n => ({ ...n, x: a.x + (n.x - a.x) * sx, y: a.y + (n.y - a.y) * sy, hi: tf(n.hi), ho: tf(n.ho) }));
+      });
+      render(); break;
+    }
+    case 'circle':
+      drag.r = dist(pt, drag.c); setCircle(paths[drag.p], drag.c, drag.r); render(); break;
+    case 'pan':
+      view.x = drag.vx + e.clientX - drag.sx; view.y = drag.vy + e.clientY - drag.sy; applyView(); break;
+    case 'newnode':
+      if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 3) return;
+      n.ho = { x: pt.x, y: pt.y }; n.hi = { x: 2 * n.x - pt.x, y: 2 * n.y - pt.y }; render(); break;
+    case 'anchor': {
+      const dx = pt.x - drag.last.x, dy = pt.y - drag.last.y;
+      n.x += dx; n.y += dy;
+      if (n.hi) { n.hi.x += dx; n.hi.y += dy; }
+      if (n.ho) { n.ho.x += dx; n.ho.y += dy; }
+      drag.last = pt; render(); break;
+    }
+    case 'handle': {
+      const w = drag.which, other = w === 'hi' ? 'ho' : 'hi';
+      n[w] = { x: pt.x, y: pt.y };
+      if (e.altKey) n.corner = true;
+      if (!n.corner && n[other]) {
+        const len = dist(n[other], n), a = Math.atan2(n.y - pt.y, n.x - pt.x);
+        n[other] = { x: n.x + Math.cos(a) * len, y: n.y + Math.sin(a) * len };
+      }
+      render(); break;
+    }
+  }
+});
+
+function endDrag() {
+  if (!drag) return;
+  const d = drag, wasEdit = d.type !== 'pan'; drag = null;
+  // A pen click that wobbled a few pixels shouldn't leave invisible stub handles behind.
+  if (d.type === 'circle' && !(d.r > 2 / view.k)) { removePath(d.p); undoStack.pop(); }
+  if (d.type === 'newnode' && d.node.ho && dist(d.node.ho, d.node) < 4 / view.k) { d.node.hi = d.node.ho = null; }
+  if (wasEdit) save(); render();
+}
+svg.addEventListener('pointerup', endDrag);
+svg.addEventListener('pointercancel', endDrag);
+svg.addEventListener('pointerleave', () => { if (!drag) { hover = null; render(); } });
+
+function editDouble(pt) {
+  const hr = 8 / view.k;
+  let hit = false;
+  paths.forEach((p, pi) => p.nodes.forEach((n, i) => {
+    if (!hit && dist(pt, n) < hr) { snap(); toggleCorner(p, i); sel = { p: pi, n: i }; hit = true; }
+  }));
+  if (!hit) {
+    const h = nearestOnPaths(pt, 6 / view.k);
+    if (h) { snap(); sel = { p: h.p, n: insertPoint(h) }; }
+  }
+  render(); save();
+}
+
+svg.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = svg.getBoundingClientRect();
+  zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0015));
+}, { passive: false });
+
+/* ---------- keyboard ---------- */
+window.addEventListener('keydown', e => {
+  if (e.target.matches('input, textarea')) return;
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+  if (mod) return;
+  if (e.code === 'Space' && !spaceDown) { spaceDown = true; document.body.classList.add('panning'); e.preventDefault(); return; }
+  switch (e.key) {
+    case 'Escape': case 'Enter': finishPath(); break;
+    case 'Backspace': case 'Delete':
+      e.preventDefault();
+      if (tool === 'pen' && cur !== null) {
+        snap(); const p = paths[cur]; p.nodes.pop();
+        if (!p.nodes.length) { removePath(cur); } else sel = { p: cur, n: p.nodes.length - 1 };
+        render(); save();
+      } else deleteSelected();
+      break;
+    case 'ArrowLeft': case 'ArrowRight': case 'ArrowUp': case 'ArrowDown': {
+      if (sel.p < 0 || !paths[sel.p]) break;
+      e.preventDefault();
+      const s = e.shiftKey ? 10 : 1;
+      const dx = e.key === 'ArrowLeft' ? -s : e.key === 'ArrowRight' ? s : 0;
+      const dy = e.key === 'ArrowUp' ? -s : e.key === 'ArrowDown' ? s : 0;
+      nudge(dx, dy); break;
+    }
+    case 'p': case 'P': setTool('pen'); break;
+    case 'c': case 'C': setTool('circle'); break;
+    case 'v': case 'V': setTool('edit'); break;
+    case 'h': case 'H': setTool('pan'); break;
+    case '0': fit(); break;
+    case '+': case '=': zoomCenter(1.25); break;
+    case '-': zoomCenter(0.8); break;
+  }
+});
+window.addEventListener('keyup', e => { if (e.code === 'Space') { spaceDown = false; document.body.classList.remove('panning'); } });
+
+function zoomCenter(fct) { const r = svg.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, fct); }
+
+/* ---------- image loading ---------- */
+function loadImage(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const im = new Image();
+    im.onload = () => {
+      setDoc(im.naturalWidth, im.naturalHeight);
+      img.setAttribute('href', reader.result);
+      hasImage = true; $('clear-sketch').disabled = false; fit(); save();
+    };
+    im.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+$('file').addEventListener('change', e => { loadImage(e.target.files[0]); e.target.value = ''; });
+stage.addEventListener('dragover', e => { e.preventDefault(); stage.classList.add('dragover'); });
+stage.addEventListener('dragleave', () => stage.classList.remove('dragover'));
+stage.addEventListener('drop', e => {
+  e.preventDefault(); stage.classList.remove('dragover');
+  loadImage(e.dataTransfer.files[0]);
+});
+
+/* ---------- controls ---------- */
+$('t-pen').onclick = () => setTool('pen');
+$('t-edit').onclick = () => setTool('edit');
+$('t-pan').onclick = () => setTool('pan');
+$('t-circle').onclick = () => setTool('circle');
+$('flip-h').onclick = () => flipAll('h');
+$('flip-v').onclick = () => flipAll('v');
+$('clear-sketch').onclick = () => {
+  img.removeAttribute('href');
+  hasImage = false;
+  flip = { h: false, v: false }; applyFlip();
+  $('clear-sketch').disabled = true;
+  render();
+};
+// Mirror the sketch and every path together so they stay aligned.
+function flipAll(axis) {
+  finishPath();
+  snap();
+  const m = axis === 'h' ? (q => { q.x = doc.w - q.x; }) : (q => { q.y = doc.h - q.y; });
+  paths.forEach(p => p.nodes.forEach(n => { m(n); if (n.hi) m(n.hi); if (n.ho) m(n.ho); }));
+  flip[axis] = !flip[axis];
+  applyFlip(); render(); save();
+}
+$('opacity').oninput = e => img.setAttribute('opacity', e.target.value);
+$('color').oninput = e => { style.color = e.target.value; render(); save(); };
+$('width').oninput = e => { const v = parseFloat(e.target.value); if (v > 0) { style.width = v; render(); save(); } };
+$('zoomin').onclick = () => zoomCenter(1.25);
+$('zoomout').onclick = () => zoomCenter(0.8);
+$('fit').onclick = fit;
+$('undo').onclick = undo;
+$('redo').onclick = redo;
+$('del').onclick = deleteSelected;
+$('clear').onclick = () => { if (!paths.length) return; snap(); paths = []; extra = []; cur = null; sel = { p: -1, n: -1 }; render(); save(); };
+
+function buildSVG() {
+  const body = paths.filter(p => p.nodes.length > 1).map(p => `    <path d="${pathD(p)}"/>`).join('\n');
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${doc.w}" height="${doc.h}" viewBox="0 0 ${doc.w} ${doc.h}">\n` +
+    `  <g fill="none" stroke="${style.color}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round">\n` +
+    body + `\n  </g>\n</svg>\n`;
+}
+$('export').onclick = () => { finishPath(); $('out').value = buildSVG(); $('copy').textContent = 'Copy SVG'; $('dlg').showModal(); };
+$('close').onclick = () => $('dlg').close();
+$('download').onclick = () => {
+  const url = URL.createObjectURL(new Blob([$('out').value], { type: 'image/svg+xml' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = 'tracing.svg';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+$('copy').onclick = async () => {
+  const ta = $('out');
+  try { await navigator.clipboard.writeText(ta.value); }
+  catch (err) { ta.focus(); ta.select(); try { document.execCommand('copy'); } catch (e2) {} }
+  $('copy').textContent = 'Copied';
+};
+
+window.addEventListener('resize', () => { applyView(); });
+
+/* ---------- start ---------- */
+load();
+setDoc(doc.w, doc.h);
+setTool('pen');
+fit();
+})();
+</script>
+</body>
+</html>
