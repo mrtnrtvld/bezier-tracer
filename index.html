@@ -52,7 +52,7 @@ body[data-tool="pan"] #svg,body.panning #svg{cursor:grab}
 .board{fill:var(--board)}
 .trace{stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
 .hit{stroke:transparent;pointer-events:none}
-body[data-tool="edit"] .hit{pointer-events:stroke;cursor:pointer}
+body[data-tool="edit"] .hit{pointer-events:stroke;cursor:move}
 body[data-tool="edit"] .hit.filled{pointer-events:visiblePainted}
 input[type=checkbox]{margin:0;accent-color:var(--accent)}
 body[data-tool="text"] #svg{cursor:text}
@@ -435,7 +435,7 @@ function render() {
 /* ---------- tools ---------- */
 const hints = {
   pen: 'Click to place a corner point; click and drag to pull out curve handles. Click the first point to close the shape. <kbd>Enter</kbd> or <kbd>Esc</kbd> finishes the path. Click on an existing path to add a point to it, or click an open path’s end to keep drawing it.',
-  edit: 'Drag points or handles. <kbd>Alt</kbd>-drag a handle to turn a smooth point into a corner. Double-click a point to toggle smooth/corner, or double-click a path to add a point. <kbd>Delete</kbd> removes the selected point, or the whole path if only the path is selected. Arrow keys nudge the selection 1 px, <kbd>Shift</kbd>+arrows 10 px. <kbd>Shift</kbd>-click paths to select several, then drag a corner of the box to scale (<kbd>Shift</kbd> stretches freely, <kbd>Alt</kbd> scales from the center).',
+  edit: 'Drag a shape or text to move it. Drag points or handles to reshape. <kbd>Alt</kbd>-drag a handle to turn a smooth point into a corner. Double-click a point to toggle smooth/corner, or double-click a path to add a point. <kbd>Delete</kbd> removes the selected point, or the whole path if only the path is selected. Arrow keys nudge the selection 1 px, <kbd>Shift</kbd>+arrows 10 px. <kbd>Shift</kbd>-click paths to select several, then drag a corner of the box to scale (<kbd>Shift</kbd> stretches freely, <kbd>Alt</kbd> scales from the center).',
   circle: 'Drag from the center outward to draw a circle. It’s a regular Bézier path, so you can reshape it in Edit mode.',
   text: 'Click to add text, or click existing text to change it. <kbd>Enter</kbd> places it, <kbd>Esc</kbd> cancels. The color comes from Fill and the size from Size. In Edit mode, drag text to move it and double-click to retype it.',
   pan: 'Drag to move around. Scroll to zoom. Hold <kbd>Space</kbd> in any tool to pan.'
@@ -643,7 +643,10 @@ function editDown(pt, e) {
       }
     }
   }
-  if (!e.shiftKey) extra = [];
+  // Pressing on a path that's already part of a multi-selection drags the whole group.
+  const hp = (e.target.dataset && e.target.dataset.p !== undefined) ? +e.target.dataset.p : -1;
+  const keepGroup = hp >= 0 && !e.shiftKey && sel.n < 0 && selectedPaths().includes(hp);
+  if (!e.shiftKey && !keepGroup) extra = [];
   if (sel.p >= 0 && paths[sel.p]) {
     const ns = paths[sel.p].nodes;
     for (let i = 0; i < ns.length; i++) for (const w of ['hi', 'ho']) {
@@ -661,15 +664,18 @@ function editDown(pt, e) {
       }
     }
   }
-  if (e.target.dataset && e.target.dataset.p !== undefined) {
-    const i = +e.target.dataset.p;
+  if (hp >= 0) {
+    const i = hp;
     if (e.shiftKey && sel.p >= 0) {
       const set = selectedPaths();
       if (set.includes(i)) {
         const rest = set.filter(j => j !== i);
         sel = { p: rest.length ? rest[0] : -1, n: -1 }; extra = rest.slice(1);
       } else { sel.n = -1; extra.push(i); }
-    } else sel = { p: i, n: -1 };
+      render(); return;
+    }
+    if (!keepGroup) sel = { p: i, n: -1 };
+    drag = { type: 'move', list: selectedPaths(), last: pt, pre: state() };
     render(); return;
   }
   if (!e.shiftKey) sel = { p: -1, n: -1 };
@@ -750,6 +756,15 @@ svg.addEventListener('pointermove', e => {
         paths[pi].nodes = drag.orig[k].map(n => ({ ...n, x: a.x + (n.x - a.x) * sx, y: a.y + (n.y - a.y) * sy, hi: tf(n.hi), ho: tf(n.ho) }));
       });
       render(); break;
+    }
+    case 'move': {
+      const dx = pt.x - drag.last.x, dy = pt.y - drag.last.y;
+      drag.list.forEach(pi => paths[pi].nodes.forEach(q => {
+        q.x += dx; q.y += dy;
+        if (q.hi) { q.hi.x += dx; q.hi.y += dy; }
+        if (q.ho) { q.ho.x += dx; q.ho.y += dy; }
+      }));
+      drag.last = pt; render(); break;
     }
     case 'text':
       drag.t.x += pt.x - drag.last.x; drag.t.y += pt.y - drag.last.y; drag.last = pt; render(); break;
