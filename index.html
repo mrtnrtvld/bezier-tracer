@@ -50,9 +50,18 @@ input[type=color]{width:32px;height:28px;padding:0;border:1px solid var(--line);
 body[data-tool="pen"] #svg,body[data-tool="circle"] #svg{cursor:crosshair}
 body[data-tool="pan"] #svg,body.panning #svg{cursor:grab}
 .board{fill:var(--board)}
-.trace{fill:none;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
-.hit{fill:none;stroke:transparent;pointer-events:none}
+.trace{stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+.hit{stroke:transparent;pointer-events:none}
 body[data-tool="edit"] .hit{pointer-events:stroke;cursor:pointer}
+body[data-tool="edit"] .hit.filled{pointer-events:visiblePainted}
+input[type=checkbox]{margin:0;accent-color:var(--accent)}
+body[data-tool="text"] #svg{cursor:text}
+.label{font-family:Figtree,system-ui,sans-serif;pointer-events:none;user-select:none;-webkit-user-select:none}
+body[data-tool="edit"] .label{pointer-events:auto;cursor:move}
+body[data-tool="text"] .label{pointer-events:auto;cursor:text}
+.texted{position:absolute;transform:translate(-50%,-50%);font-family:Figtree,system-ui,sans-serif;line-height:1.1;
+  text-align:center;background:color-mix(in srgb,var(--panel) 70%,transparent);border:1px dashed var(--accent);border-radius:3px;
+  padding:0 4px;margin:0;outline:none;field-sizing:content;min-width:3ch}
 .preview{fill:none;stroke:var(--accent);stroke-dasharray:4 4;opacity:.7;pointer-events:none;vector-effect:non-scaling-stroke}
 .hline{stroke:var(--handle);pointer-events:none}
 .hdot{fill:var(--panel);stroke:var(--handle);pointer-events:none}
@@ -83,6 +92,7 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
   <div class="group" role="group" aria-label="Tools">
     <button id="t-pen" aria-pressed="true" title="Pen (P)">Pen</button>
     <button id="t-circle" aria-pressed="false" title="Circle (C)">Circle</button>
+    <button id="t-text" aria-pressed="false" title="Text (T)">Text</button>
     <button id="t-edit" aria-pressed="false" title="Edit (V)">Edit</button>
     <button id="t-pan" aria-pressed="false" title="Pan (H, or hold Space)">Pan</button>
   </div>
@@ -96,6 +106,13 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
   <div class="group">
     <label class="ctl">Stroke <input type="color" id="color" value="#2f6fd6" aria-label="Stroke color"></label>
     <input type="number" id="width" min="0.5" max="40" step="0.5" value="3" aria-label="Stroke width">
+  </div>
+  <div class="group" title="Fill for the selected paths and for new paths">
+    <label class="ctl">Fill <input type="checkbox" id="fill-on" aria-label="Fill on"></label>
+    <input type="color" id="fill" value="#f2c94c" aria-label="Fill color">
+  </div>
+  <div class="group" title="Size of the selected text and of new text">
+    <label class="ctl">Size <input type="number" id="tsize" min="4" max="400" step="1" value="32" aria-label="Text size"></label>
   </div>
   <div class="group">
     <button id="zoomout" title="Zoom out">−</button>
@@ -121,6 +138,7 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
       <g id="overlay"></g>
     </g>
   </svg>
+  <input id="texted" class="texted" type="text" aria-label="Text" spellcheck="false" autocomplete="off" hidden>
   <div class="empty" id="empty"><p>Drop a sketch image here, or use Load sketch. You can also start drawing on the blank board.</p></div>
 </div>
 
@@ -143,12 +161,15 @@ const svg = $('svg'), world = $('world'), board = $('board'), img = $('img');
 const pathsG = $('paths'), overlayG = $('overlay'), stage = $('stage');
 
 let doc = { w: 1000, h: 750 };
-let paths = [];            // [{closed, nodes:[{x,y,hi,ho,corner}]}]
+let paths = [];            // [{closed, fill, nodes:[{x,y,hi,ho,corner}]}]  fill: color string or null
 let cur = null;            // index of path being drawn with the pen
 let sel = { p: -1, n: -1 };
 let tool = 'pen';
 let view = { x: 0, y: 0, k: 1 };
-let style = { color: '#2f6fd6', width: 3 };
+let texts = [];            // [{x, y, text, size, color}]  x,y is the text's center
+let selT = -1;             // index of the selected text, or -1
+let editT = null;          // text being typed: {i (-1 for new), x, y, size, color}
+let style = { color: '#2f6fd6', width: 3, fill: '#f2c94c', fillOn: false, textSize: 32 };
 let hover = null, drag = null, spaceDown = false, hasImage = false;
 let lastTap = { t: 0, x: 0, y: 0 };
 let extra = []; // additional selected paths (Shift-click)
@@ -156,12 +177,13 @@ let undoStack = [], redoStack = [];
 
 const f = v => Math.round(v * 100) / 100;
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-const state = () => JSON.stringify({ paths, cur, flip });
+const state = () => JSON.stringify({ paths, texts, cur, flip });
+const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 function pushUndo(s) { undoStack.push(s); if (undoStack.length > 200) undoStack.shift(); redoStack = []; }
 function snap() { pushUndo(state()); }
 function restore(s) {
-  const o = JSON.parse(s); paths = o.paths; cur = o.cur;
+  const o = JSON.parse(s); paths = o.paths; texts = o.texts || []; cur = o.cur; selT = -1;
   if (o.flip) { flip = o.flip; applyFlip(); }
   extra = [];
   if (cur !== null && (!paths[cur] || paths[cur].closed)) cur = null;
@@ -171,14 +193,25 @@ function undo() { if (!undoStack.length) return; redoStack.push(state()); restor
 function redo() { if (!redoStack.length) return; undoStack.push(state()); restore(redoStack.pop()); }
 
 function save() {
-  try { localStorage.setItem('bezier-tracer-v1', JSON.stringify({ paths, doc, style })); } catch (e) {}
+  try { localStorage.setItem('bezier-tracer-v1', JSON.stringify({ paths, texts, doc, style })); } catch (e) {}
 }
 function load() {
   try {
     const o = JSON.parse(localStorage.getItem('bezier-tracer-v1') || 'null');
-    if (o) { paths = o.paths || []; doc = o.doc || doc; style = o.style || style; }
+    if (o) { paths = o.paths || []; texts = o.texts || []; doc = o.doc || doc; style = { ...style, ...o.style }; }
   } catch (e) {}
   $('color').value = style.color; $('width').value = style.width;
+}
+const newFill = () => style.fillOn ? style.fill : null;
+// Show the selected path's fill in the toolbar, or the default for new paths when nothing is selected.
+function syncFill() {
+  const t = editT || (selT >= 0 && texts[selT]);
+  if (document.activeElement !== $('tsize')) $('tsize').value = t ? t.size : style.textSize;
+  if (t) { $('fill-on').checked = true; $('fill').value = t.color; return; }
+  const list = selectedPaths(), p = list.length ? paths[list[0]] : null;
+  const on = p ? !!p.fill : style.fillOn;
+  $('fill-on').checked = on;
+  $('fill').value = (p && p.fill) || style.fill;
 }
 
 /* ---------- geometry ---------- */
@@ -277,7 +310,7 @@ function reversePath(p) {
 }
 
 /* ---------- view ---------- */
-function applyView() { world.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`); }
+function applyView() { world.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`); placeEditor(); }
 function fit() {
   const r = stage.getBoundingClientRect();
   const k = Math.min(r.width / doc.w, r.height / doc.h) * 0.92;
@@ -314,10 +347,15 @@ function render() {
   let s = '';
   paths.forEach((p, i) => {
     const d = pathD(p);
-    s += `<path class="trace" d="${d}" stroke="${style.color}" stroke-width="${style.width}"/>`;
-    s += `<path class="hit" data-p="${i}" d="${d}" stroke-width="${14 / k}"/>`;
+    s += `<path class="trace" d="${d}" fill="${p.fill || 'none'}" stroke="${style.color}" stroke-width="${style.width}"/>`;
+    s += `<path class="hit${p.fill ? ' filled' : ''}" data-p="${i}" d="${d}" fill="${p.fill ? 'transparent' : 'none'}" stroke-width="${14 / k}"/>`;
+  });
+  texts.forEach((t, i) => {
+    if (editT && editT.i === i) return; // hidden while its editor is open
+    s += `<text class="label" data-t="${i}" x="${f(t.x)}" y="${f(t.y)}" font-size="${t.size}" fill="${t.color}" text-anchor="middle" dominant-baseline="central">${esc(t.text)}</text>`;
   });
   pathsG.innerHTML = s;
+  syncFill();
 
   let o = '';
   const active = cur !== null ? cur : sel.p;
@@ -379,8 +417,15 @@ function render() {
         o += `<rect class="bcorner" x="${x - cs}" y="${y - cs}" width="${2 * cs}" height="${2 * cs}" stroke-width="${1.5 / k}"/>`;
     }
   }
+  if (selT >= 0 && texts[selT]) {
+    const el = pathsG.querySelector(`[data-t="${selT}"]`);
+    if (el) {
+      const b = el.getBBox(), pad = 3 / k;
+      o += `<rect class="bbox" x="${b.x - pad}" y="${b.y - pad}" width="${b.width + 2 * pad}" height="${b.height + 2 * pad}" stroke-width="${1 / k}" stroke-dasharray="${4 / k} ${3 / k}"/>`;
+    }
+  }
   overlayG.innerHTML = o;
-  $('empty').style.display = (hasImage || paths.length) ? 'none' : '';
+  $('empty').style.display = (hasImage || paths.length || texts.length || editT) ? 'none' : '';
 }
 
 /* ---------- tools ---------- */
@@ -388,12 +433,14 @@ const hints = {
   pen: 'Click to place a corner point; click and drag to pull out curve handles. Click the first point to close the shape. <kbd>Enter</kbd> or <kbd>Esc</kbd> finishes the path. Click on an existing path to add a point to it, or click an open path’s end to keep drawing it.',
   edit: 'Drag points or handles. <kbd>Alt</kbd>-drag a handle to turn a smooth point into a corner. Double-click a point to toggle smooth/corner, or double-click a path to add a point. <kbd>Delete</kbd> removes the selected point, or the whole path if only the path is selected. Arrow keys nudge the selection 1 px, <kbd>Shift</kbd>+arrows 10 px. <kbd>Shift</kbd>-click paths to select several, then drag a corner of the box to scale (<kbd>Shift</kbd> stretches freely, <kbd>Alt</kbd> scales from the center).',
   circle: 'Drag from the center outward to draw a circle. It’s a regular Bézier path, so you can reshape it in Edit mode.',
+  text: 'Click to add text, or click existing text to change it. <kbd>Enter</kbd> places it, <kbd>Esc</kbd> cancels. The color comes from Fill and the size from Size. In Edit mode, drag text to move it and double-click to retype it.',
   pan: 'Drag to move around. Scroll to zoom. Hold <kbd>Space</kbd> in any tool to pan.'
 };
 function setTool(t) {
+  commitText();
   finishPath();
   tool = t; document.body.dataset.tool = t;
-  for (const n of ['pen', 'circle', 'edit', 'pan']) $('t-' + n).setAttribute('aria-pressed', String(n === t));
+  for (const n of ['pen', 'circle', 'text', 'edit', 'pan']) $('t-' + n).setAttribute('aria-pressed', String(n === t));
   $('hint').innerHTML = hints[t];
   render();
 }
@@ -414,6 +461,7 @@ function nudge(dx, dy) {
   const now = performance.now();
   if (now - lastNudge > 700) snap();
   lastNudge = now;
+  if (selT >= 0 && texts[selT]) { texts[selT].x += dx; texts[selT].y += dy; render(); save(); return; }
   const p = paths[sel.p];
   const ns = sel.n >= 0 && p.nodes[sel.n] ? [p.nodes[sel.n]] : selectedPaths().flatMap(i => paths[i].nodes);
   ns.forEach(n => {
@@ -424,6 +472,7 @@ function nudge(dx, dy) {
   render(); save();
 }
 function deleteSelected() {
+  if (selT >= 0 && texts[selT]) { snap(); texts.splice(selT, 1); selT = -1; render(); save(); return; }
   if (sel.p < 0 || !paths[sel.p]) return;
   snap();
   const p = paths[sel.p];
@@ -473,15 +522,62 @@ function penDown(pt, e) {
     if (h) { snap(); sel = { p: h.p, n: insertPoint(h) }; render(); save(); return; }
   }
   snap();
-  if (cur === null) { paths.push({ nodes: [], closed: false }); cur = paths.length - 1; }
+  if (cur === null) { paths.push({ nodes: [], closed: false, fill: newFill() }); cur = paths.length - 1; }
   const node = { x: pt.x, y: pt.y, hi: null, ho: null };
   paths[cur].nodes.push(node);
   sel = { p: cur, n: paths[cur].nodes.length - 1 };
   drag = { type: 'newnode', node, sx: e.clientX, sy: e.clientY };
   render();
 }
+/* ---------- text ---------- */
+const hitText = e => (e.target.dataset && e.target.dataset.t !== undefined) ? +e.target.dataset.t : -1;
+function startTextEdit(i, pt) {
+  commitText();
+  finishPath();
+  const ed = $('texted');
+  if (i >= 0) { const t = texts[i]; editT = { i, x: t.x, y: t.y, size: t.size, color: t.color }; ed.value = t.text; }
+  else { editT = { i: -1, x: pt.x, y: pt.y, size: style.textSize, color: style.fill }; ed.value = ''; }
+  selT = i; sel = { p: -1, n: -1 }; extra = [];
+  ed.hidden = false; placeEditor(); render();
+  setTimeout(() => { ed.focus(); ed.select(); });
+}
+function placeEditor() {
+  if (!editT) return;
+  const ed = $('texted'), k = view.k;
+  ed.style.left = (view.x + editT.x * k) + 'px';
+  ed.style.top = (view.y + editT.y * k) + 'px';
+  ed.style.fontSize = (editT.size * k) + 'px';
+  ed.style.color = editT.color;
+}
+function commitText(cancel) {
+  if (!editT) return;
+  const ed = $('texted'), v = ed.value, e = editT;
+  editT = null; ed.hidden = true;
+  if (!cancel) {
+    if (e.i < 0) {
+      if (v.trim()) { snap(); texts.push({ x: e.x, y: e.y, text: v, size: e.size, color: e.color }); selT = texts.length - 1; }
+    } else if (!v.trim()) { snap(); texts.splice(e.i, 1); selT = -1; }
+    else {
+      const t = texts[e.i];
+      if (v !== t.text || e.size !== t.size || e.color !== t.color) { snap(); Object.assign(t, { text: v, size: e.size, color: e.color }); }
+    }
+  }
+  render(); save();
+}
+$('texted').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); commitText(); }
+  else if (e.key === 'Escape') { e.preventDefault(); commitText(true); }
+});
+$('texted').addEventListener('blur', () => commitText());
+
 function editDown(pt, e) {
   const hr = 8 / view.k;
+  const ti = hitText(e);
+  if (ti >= 0) {
+    selT = ti; sel = { p: -1, n: -1 }; extra = [];
+    drag = { type: 'text', t: texts[ti], last: pt, pre: state() }; render(); return;
+  }
+  selT = -1;
   const box = scaleBox();
   if (box) {
     const cs = [[box.x0, box.y0], [box.x1, box.y0], [box.x1, box.y1], [box.x0, box.y1]];
@@ -545,7 +641,7 @@ function setCircle(p, c, r) {
 }
 function circleDown(pt) {
   snap();
-  const p = { nodes: [], closed: true };
+  const p = { nodes: [], closed: true, fill: newFill() };
   setCircle(p, pt, 0);
   paths.push(p);
   sel = { p: paths.length - 1, n: -1 };
@@ -560,16 +656,26 @@ svg.addEventListener('pointerdown', e => {
     drag = { type: 'pan', sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y }; e.preventDefault(); return;
   }
   if (e.button !== 0) return;
+  if (tool === 'text') {
+    e.preventDefault(); // keep focus in the text box we're about to open
+    const ti = hitText(e);
+    startTextEdit(ti, pt); return;
+  }
   if (tool === 'edit') {
     // Detect double-clicks ourselves: the browser's dblclick is unreliable here
     // because the element under the pointer is redrawn on every click.
     const now = performance.now();
     const dbl = now - lastTap.t < 400 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 6;
     lastTap = dbl ? { t: 0, x: 0, y: 0 } : { t: now, x: e.clientX, y: e.clientY };
-    if (dbl) { drag = null; editDouble(pt); return; }
+    if (dbl) {
+      drag = null;
+      const ti = hitText(e);
+      if (ti >= 0) { e.preventDefault(); startTextEdit(ti); } else editDouble(pt);
+      return;
+    }
   }
-  if (tool === 'pen') { extra = []; penDown(pt, e); }
-  else if (tool === 'circle') { extra = []; circleDown(pt); }
+  if (tool === 'pen') { extra = []; selT = -1; penDown(pt, e); }
+  else if (tool === 'circle') { extra = []; selT = -1; circleDown(pt); }
   else editDown(pt, e);
 });
 
@@ -596,6 +702,8 @@ svg.addEventListener('pointermove', e => {
       });
       render(); break;
     }
+    case 'text':
+      drag.t.x += pt.x - drag.last.x; drag.t.y += pt.y - drag.last.y; drag.last = pt; render(); break;
     case 'circle':
       drag.r = dist(pt, drag.c); setCircle(paths[drag.p], drag.c, drag.r); render(); break;
     case 'pan':
@@ -673,7 +781,7 @@ window.addEventListener('keydown', e => {
       } else deleteSelected();
       break;
     case 'ArrowLeft': case 'ArrowRight': case 'ArrowUp': case 'ArrowDown': {
-      if (sel.p < 0 || !paths[sel.p]) break;
+      if ((sel.p < 0 || !paths[sel.p]) && !(selT >= 0 && texts[selT])) break;
       e.preventDefault();
       const s = e.shiftKey ? 10 : 1;
       const dx = e.key === 'ArrowLeft' ? -s : e.key === 'ArrowRight' ? s : 0;
@@ -682,6 +790,7 @@ window.addEventListener('keydown', e => {
     }
     case 'p': case 'P': setTool('pen'); break;
     case 'c': case 'C': setTool('circle'); break;
+    case 't': case 'T': setTool('text'); break;
     case 'v': case 'V': setTool('edit'); break;
     case 'h': case 'H': setTool('pan'); break;
     case '0': fit(); break;
@@ -721,6 +830,7 @@ $('t-pen').onclick = () => setTool('pen');
 $('t-edit').onclick = () => setTool('edit');
 $('t-pan').onclick = () => setTool('pan');
 $('t-circle').onclick = () => setTool('circle');
+$('t-text').onclick = () => setTool('text');
 $('flip-h').onclick = () => flipAll('h');
 $('flip-v').onclick = () => flipAll('v');
 $('clear-sketch').onclick = () => {
@@ -736,27 +846,68 @@ function flipAll(axis) {
   snap();
   const m = axis === 'h' ? (q => { q.x = doc.w - q.x; }) : (q => { q.y = doc.h - q.y; });
   paths.forEach(p => p.nodes.forEach(n => { m(n); if (n.hi) m(n.hi); if (n.ho) m(n.ho); }));
+  texts.forEach(m); // text stays readable; only its position mirrors
   flip[axis] = !flip[axis];
   applyFlip(); render(); save();
 }
 $('opacity').oninput = e => img.setAttribute('opacity', e.target.value);
 $('color').oninput = e => { style.color = e.target.value; render(); save(); };
 $('width').oninput = e => { const v = parseFloat(e.target.value); if (v > 0) { style.width = v; render(); save(); } };
+// Fill controls set the default for new paths and recolor any selected paths.
+// Dragging around the color picker counts as one undo step.
+let fillUndoOpen = false;
+function applyFill(on, color) {
+  if (editT) { editT.color = color; style.fill = color; placeEditor(); save(); return; }
+  if (selT >= 0 && texts[selT]) {
+    // Text always has a color, so the checkbox doesn't apply to it.
+    if (!fillUndoOpen) { snap(); fillUndoOpen = true; }
+    texts[selT].color = color; style.fill = color; render(); save(); return;
+  }
+  style.fillOn = on; style.fill = color;
+  const list = selectedPaths();
+  if (list.length) {
+    if (!fillUndoOpen) { snap(); fillUndoOpen = true; }
+    list.forEach(i => { paths[i].fill = on ? color : null; });
+  }
+  render(); save();
+}
+$('fill-on').onchange = e => { fillUndoOpen = false; applyFill(e.target.checked, $('fill').value); fillUndoOpen = false; };
+$('fill').oninput = e => applyFill(true, e.target.value);
+$('fill').onchange = () => { fillUndoOpen = false; };
+let sizeUndoOpen = false;
+$('tsize').oninput = e => {
+  const v = parseFloat(e.target.value); if (!(v > 0)) return;
+  style.textSize = v;
+  if (editT) { editT.size = v; placeEditor(); }
+  else if (selT >= 0 && texts[selT]) {
+    if (!sizeUndoOpen) { snap(); sizeUndoOpen = true; }
+    texts[selT].size = v; render();
+  }
+  save();
+};
+$('tsize').onchange = () => { sizeUndoOpen = false; };
 $('zoomin').onclick = () => zoomCenter(1.25);
 $('zoomout').onclick = () => zoomCenter(0.8);
 $('fit').onclick = fit;
 $('undo').onclick = undo;
 $('redo').onclick = redo;
 $('del').onclick = deleteSelected;
-$('clear').onclick = () => { if (!paths.length) return; snap(); paths = []; extra = []; cur = null; sel = { p: -1, n: -1 }; render(); save(); };
+$('clear').onclick = () => {
+  commitText(true);
+  if (!paths.length && !texts.length) return;
+  snap(); paths = []; texts = []; selT = -1; extra = []; cur = null; sel = { p: -1, n: -1 }; render(); save();
+};
 
 function buildSVG() {
-  const body = paths.filter(p => p.nodes.length > 1).map(p => `    <path d="${pathD(p)}"/>`).join('\n');
+  const body = paths.filter(p => p.nodes.length > 1)
+    .map(p => `    <path${p.fill ? ` fill="${p.fill}"` : ''} d="${pathD(p)}"/>`).join('\n');
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${doc.w}" height="${doc.h}" viewBox="0 0 ${doc.w} ${doc.h}">\n` +
     `  <g fill="none" stroke="${style.color}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round">\n` +
-    body + `\n  </g>\n</svg>\n`;
+    body + `\n  </g>\n` +
+    texts.map(t => `  <text x="${f(t.x)}" y="${f(t.y)}" font-family="Figtree, sans-serif" font-size="${t.size}" fill="${t.color}" text-anchor="middle" dominant-baseline="central">${esc(t.text)}</text>\n`).join('') +
+    `</svg>\n`;
 }
-$('export').onclick = () => { finishPath(); $('out').value = buildSVG(); $('copy').textContent = 'Copy SVG'; $('dlg').showModal(); };
+$('export').onclick = () => { commitText(); finishPath(); $('out').value = buildSVG(); $('copy').textContent = 'Copy SVG'; $('dlg').showModal(); };
 $('close').onclick = () => $('dlg').close();
 $('download').onclick = () => {
   const url = URL.createObjectURL(new Blob([$('out').value], { type: 'image/svg+xml' }));
