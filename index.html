@@ -75,6 +75,7 @@ body[data-tool="text"] .label{pointer-events:auto;cursor:text}
 .selline{fill:none;stroke:var(--accent);opacity:.6;pointer-events:none}
 .bbox{fill:none;stroke:var(--accent);pointer-events:none}
 .bcorner{fill:var(--panel);stroke:var(--accent);pointer-events:none}
+.marquee{fill:color-mix(in srgb,var(--accent) 10%,transparent);stroke:var(--accent);pointer-events:none}
 .layers{position:absolute;top:8px;right:8px;bottom:8px;width:236px;max-width:calc(100% - 16px);display:flex;flex-direction:column;
   background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.14);overflow:hidden;z-index:2}
 .layers[hidden]{display:none}
@@ -212,6 +213,7 @@ let style = { color: '#2f6fd6', width: 3, fill: '#f2c94c', fillOn: false, textSi
 let hover = null, drag = null, spaceDown = false, hasImage = false;
 let lastTap = { t: 0, x: 0, y: 0 };
 let extra = []; // additional selected paths (Shift-click)
+let extraT = []; // additional selected texts
 let undoStack = [], redoStack = [];
 
 const f = v => Math.round(v * 100) / 100;
@@ -222,7 +224,7 @@ const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&
 function pushUndo(s) { undoStack.push(s); if (undoStack.length > 200) undoStack.shift(); redoStack = []; }
 function snap() { pushUndo(state()); }
 function restore(s) {
-  const o = JSON.parse(s); paths = o.paths; texts = o.texts || []; cur = o.cur; selT = -1; normZ();
+  const o = JSON.parse(s); paths = o.paths; texts = o.texts || []; cur = o.cur; selT = -1; extraT = []; normZ(); normStroke();
   if (o.flip) { flip = o.flip; applyFlip(); }
   if (o.doc && (o.doc.w !== doc.w || o.doc.h !== doc.h)) { setDoc(o.doc.w, o.doc.h); fit(); }
   extra = [];
@@ -240,9 +242,14 @@ function load() {
     const o = JSON.parse(localStorage.getItem('bezier-tracer-v1') || 'null');
     if (o) { paths = o.paths || []; texts = o.texts || []; doc = o.doc || doc; style = { ...style, ...o.style }; }
   } catch (e) {}
-  normZ();
+  normZ(); normStroke();
   $('color').value = style.color; $('width').value = style.width;
 }
+// Each path has its own stroke color and width. Paths saved before that existed take the old shared stroke.
+function normStroke() {
+  paths.forEach(p => { if (p.stroke == null) p.stroke = style.color; if (p.sw == null) p.sw = style.width; });
+}
+const newStroke = () => ({ stroke: style.color, sw: style.width });
 
 /* ---------- stacking order ---------- */
 // Paths and texts share one stacking order through their `z` value (higher = in front).
@@ -257,7 +264,7 @@ function layerItems() {
   return [...paths.map((ref, i) => ({ k: 'p', i, ref })), ...texts.map((ref, i) => ({ k: 't', i, ref }))]
     .sort((a, b) => a.ref.z - b.ref.z);
 }
-const isSelected = it => it.k === 'p' ? selectedPaths().includes(it.i) : it.i === selT;
+const isSelected = it => it.k === 'p' ? selectedPaths().includes(it.i) : selectedTexts().includes(it.i);
 function arrange(mode) {
   commitText();
   const list = layerItems(), on = list.map(isSelected);
@@ -283,8 +290,11 @@ function syncFill() {
   if (document.activeElement !== $('tsize')) $('tsize').value = t ? t.size : style.textSize;
   const fn = t ? (t.font || 'Figtree') : style.font;
   ensureFontOption(fn); $('tfont').value = fn;
-  if (t) { $('fill-on').checked = true; $('fill').value = t.color; return; }
   const list = selectedPaths(), p = list.length ? paths[list[0]] : null;
+  // Stroke controls show the selected path's stroke, or the default for new paths.
+  $('color').value = p ? p.stroke : style.color;
+  if (document.activeElement !== $('width')) $('width').value = p ? p.sw : style.width;
+  if (t) { $('fill-on').checked = true; $('fill').value = t.color; return; }
   const on = p ? !!p.fill : style.fillOn;
   $('fill-on').checked = on;
   $('fill').value = (p && p.fill) || style.fill;
@@ -365,6 +375,20 @@ function selectedPaths() {
   if (sel.p < 0 || !paths[sel.p]) return [];
   return [...new Set([sel.p, ...extra])].filter(i => paths[i]);
 }
+function selectedTexts() {
+  return [...new Set([selT, ...extraT])].filter(i => i >= 0 && texts[i]);
+}
+// Replace the whole selection: path indexes and text indexes.
+function setSelection(ps, ts) {
+  sel = { p: ps.length ? ps[0] : -1, n: -1 }; extra = ps.slice(1);
+  selT = ts.length ? ts[0] : -1; extraT = ts.slice(1);
+}
+function selectAll() {
+  if (tool !== 'edit') setTool('edit');
+  setSelection(paths.map((p, i) => i).filter(i => !paths[i].hidden), texts.map((t, i) => i).filter(i => !texts[i].hidden));
+  render();
+}
+const textBox = i => { const el = pathsG.querySelector(`[data-t="${i}"]`); return el ? el.getBBox() : null; };
 function boundsOf(list) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   const add = q => { if (q.x < x0) x0 = q.x; if (q.x > x1) x1 = q.x; if (q.y < y0) y0 = q.y; if (q.y > y1) y1 = q.y; };
@@ -375,11 +399,17 @@ function boundsOf(list) {
   });
   return x0 === Infinity ? null : { x0, y0, x1, y1 };
 }
-// The scale box appears in Edit mode when whole paths (not a single point) are selected.
+// The scale box appears in Edit mode around everything selected (unless a single point is selected).
 function scaleBox() {
   if (tool !== 'edit' || sel.n >= 0) return null;
-  const list = selectedPaths();
-  return list.length ? boundsOf(list) : null;
+  const ps = selectedPaths().filter(i => !paths[i].hidden);
+  let b = ps.length ? boundsOf(ps) : null;
+  selectedTexts().forEach(i => {
+    const r = textBox(i); if (!r) return;
+    const t = { x0: r.x, y0: r.y, x1: r.x + r.width, y1: r.y + r.height };
+    b = b ? { x0: Math.min(b.x0, t.x0), y0: Math.min(b.y0, t.y0), x1: Math.max(b.x1, t.x1), y1: Math.max(b.y1, t.y1) } : t;
+  });
+  return b;
 }
 function reversePath(p) {
   p.nodes.reverse();
@@ -433,7 +463,7 @@ function render() {
     if (ref.hidden) return;
     if (kind === 'p') {
       const p = ref, d = pathD(p);
-      s += `<path class="trace" d="${d}" fill="${p.fill || 'none'}" stroke="${style.color}" stroke-width="${style.width}"/>`;
+      s += `<path class="trace" d="${d}" fill="${p.fill || 'none'}" stroke="${p.stroke}" stroke-width="${p.sw}"/>`;
       s += `<path class="hit${p.fill ? ' filled' : ''}" data-p="${i}" d="${d}" fill="${p.fill ? 'transparent' : 'none'}" stroke-width="${14 / k}"/>`;
     } else {
       const t = ref;
@@ -505,12 +535,16 @@ function render() {
         o += `<rect class="bcorner" x="${x - cs}" y="${y - cs}" width="${2 * cs}" height="${2 * cs}" stroke-width="${1.5 / k}"/>`;
     }
   }
-  if (selT >= 0 && texts[selT]) {
-    const el = pathsG.querySelector(`[data-t="${selT}"]`);
-    if (el) {
-      const b = el.getBBox(), pad = 3 / k;
-      o += `<rect class="bbox" x="${b.x - pad}" y="${b.y - pad}" width="${b.width + 2 * pad}" height="${b.height + 2 * pad}" stroke-width="${1 / k}" stroke-dasharray="${4 / k} ${3 / k}"/>`;
-    }
+  // Outline each selected text (outside Edit mode this is the only selection cue).
+  const ts = selectedTexts();
+  if (tool !== 'edit' || ts.length + selectedPaths().length > 1) ts.forEach(i => {
+    const b = textBox(i); if (!b) return;
+    const pad = 2 / k;
+    o += `<rect class="selline" x="${b.x - pad}" y="${b.y - pad}" width="${b.width + 2 * pad}" height="${b.height + 2 * pad}" stroke-width="${1 / k}"/>`;
+  });
+  if (drag && drag.type === 'marquee') {
+    const m = drag;
+    o += `<rect class="marquee" x="${Math.min(m.a.x, m.b.x)}" y="${Math.min(m.a.y, m.b.y)}" width="${Math.abs(m.b.x - m.a.x)}" height="${Math.abs(m.b.y - m.a.y)}" stroke-width="${1 / k}"/>`;
   }
   overlayG.innerHTML = o;
   $('empty').style.display = (hasImage || paths.length || texts.length || editT) ? 'none' : '';
@@ -519,7 +553,7 @@ function render() {
 /* ---------- tools ---------- */
 const hints = {
   pen: 'Click to place a corner point; click and drag to pull out curve handles. Click the first point to close the shape. <kbd>Enter</kbd> or <kbd>Esc</kbd> finishes the path. Click on an existing path to add a point to it, or click an open path’s end to keep drawing it.',
-  edit: 'Drag a shape or text to move it. Drag points or handles to reshape. <kbd>]</kbd> / <kbd>[</kbd> bring forward / send backward (add <kbd>Shift</kbd> for front / back); <kbd>L</kbd> shows layers. <kbd>Alt</kbd>-drag a handle to turn a smooth point into a corner. Double-click a point to toggle smooth/corner, or double-click a path to add a point. <kbd>Delete</kbd> removes the selected point, or the whole path if only the path is selected. Arrow keys nudge the selection 1 px, <kbd>Shift</kbd>+arrows 10 px. <kbd>Shift</kbd>-click paths to select several, then drag a corner of the box to scale (<kbd>Shift</kbd> stretches freely, <kbd>Alt</kbd> scales from the center).',
+  edit: 'Drag a shape or text to move it. Drag on empty space to select everything the box touches (<kbd>Shift</kbd> adds), or press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>A</kbd> for everything; drag a corner of the selection box to scale. Drag points or handles to reshape. <kbd>]</kbd> / <kbd>[</kbd> bring forward / send backward (add <kbd>Shift</kbd> for front / back); <kbd>L</kbd> shows layers. <kbd>Alt</kbd>-drag a handle to turn a smooth point into a corner. Double-click a point to toggle smooth/corner, or double-click a path to add a point. <kbd>Delete</kbd> removes the selected point, or the whole path if only the path is selected. Arrow keys nudge the selection 1 px, <kbd>Shift</kbd>+arrows 10 px. <kbd>Shift</kbd>-click to add or remove items. When scaling, <kbd>Shift</kbd> stretches freely and <kbd>Alt</kbd> scales from the center.',
   rect: 'Drag from corner to corner to draw a rectangle. Hold <kbd>Shift</kbd> for a square, <kbd>Alt</kbd> to draw from the center. It’s a regular path, so you can reshape it in Edit mode.',
   circle: 'Drag from the center outward to draw a circle. It’s a regular Bézier path, so you can reshape it in Edit mode.',
   text: 'Click to add text, or click existing text to change it. <kbd>Enter</kbd> places it, <kbd>Esc</kbd> cancels. The color comes from Fill and the size from Size. In Edit mode, drag text to move it and double-click to retype it.',
@@ -550,9 +584,9 @@ function nudge(dx, dy) {
   const now = performance.now();
   if (now - lastNudge > 700) snap();
   lastNudge = now;
-  if (selT >= 0 && texts[selT]) { texts[selT].x += dx; texts[selT].y += dy; render(); save(); return; }
+  selectedTexts().forEach(i => { texts[i].x += dx; texts[i].y += dy; });
   const p = paths[sel.p];
-  const ns = sel.n >= 0 && p.nodes[sel.n] ? [p.nodes[sel.n]] : selectedPaths().flatMap(i => paths[i].nodes);
+  const ns = p && sel.n >= 0 && p.nodes[sel.n] ? [p.nodes[sel.n]] : selectedPaths().flatMap(i => paths[i].nodes);
   ns.forEach(n => {
     n.x += dx; n.y += dy;
     if (n.hi) { n.hi.x += dx; n.hi.y += dy; }
@@ -561,16 +595,17 @@ function nudge(dx, dy) {
   render(); save();
 }
 function deleteSelected() {
-  if (selT >= 0 && texts[selT]) { snap(); texts.splice(selT, 1); selT = -1; render(); save(); return; }
-  if (sel.p < 0 || !paths[sel.p]) return;
+  const ts = selectedTexts(), p = paths[sel.p];
+  if (!ts.length && !p) return;
   snap();
-  const p = paths[sel.p];
-  if (sel.n >= 0) {
+  if (p && sel.n >= 0) {
     p.nodes.splice(sel.n, 1);
     if (p.nodes.length < 2 && cur !== sel.p) removePath(sel.p);
     else if (p.nodes.length < 3) p.closed = false;
     sel.n = -1;
-  } else { selectedPaths().sort((a, b) => b - a).forEach(removePath); extra = []; }
+  } else if (p) { selectedPaths().sort((a, b) => b - a).forEach(removePath); extra = []; }
+  ts.sort((a, b) => b - a).forEach(i => texts.splice(i, 1));
+  selT = -1; extraT = [];
   render(); save();
 }
 function toggleCorner(p, i) {
@@ -611,7 +646,7 @@ function penDown(pt, e) {
     if (h) { snap(); sel = { p: h.p, n: insertPoint(h) }; render(); save(); return; }
   }
   snap();
-  if (cur === null) { paths.push({ nodes: [], closed: false, fill: newFill(), z: nextZ() }); cur = paths.length - 1; }
+  if (cur === null) { paths.push({ nodes: [], closed: false, fill: newFill(), ...newStroke(), z: nextZ() }); cur = paths.length - 1; }
   const node = { x: pt.x, y: pt.y, hi: null, ho: null };
   paths[cur].nodes.push(node);
   sel = { p: cur, n: paths[cur].nodes.length - 1 };
@@ -703,7 +738,7 @@ function startTextEdit(i, pt) {
   const ed = $('texted');
   if (i >= 0) { const t = texts[i]; editT = { i, x: t.x, y: t.y, size: t.size, color: t.color, font: t.font || 'Figtree' }; ed.value = t.text; }
   else { editT = { i: -1, x: pt.x, y: pt.y, size: style.textSize, color: style.fill, font: style.font }; ed.value = ''; }
-  selT = i; sel = { p: -1, n: -1 }; extra = [];
+  selT = i; extraT = []; sel = { p: -1, n: -1 }; extra = [];
   ed.hidden = false; placeEditor(); render();
   setTimeout(() => { ed.focus(); ed.select(); });
 }
@@ -722,7 +757,7 @@ function commitText(cancel) {
   editT = null; ed.hidden = true;
   if (!cancel) {
     if (e.i < 0) {
-      if (v.trim()) { snap(); texts.push({ x: e.x, y: e.y, text: v, size: e.size, color: e.color, font: e.font, z: nextZ() }); selT = texts.length - 1; }
+      if (v.trim()) { snap(); texts.push({ x: e.x, y: e.y, text: v, size: e.size, color: e.color, font: e.font, z: nextZ() }); selT = texts.length - 1; extraT = []; }
     } else if (!v.trim()) { snap(); texts.splice(e.i, 1); selT = -1; }
     else {
       const t = texts[e.i];
@@ -741,32 +776,41 @@ $('texted').addEventListener('blur', () => commitText());
 
 function editDown(pt, e) {
   const hr = 8 / view.k;
-  const ti = hitText(e);
-  if (ti >= 0) {
-    selT = ti; sel = { p: -1, n: -1 }; extra = [];
-    drag = { type: 'text', t: texts[ti], last: pt, pre: state() }; render(); return;
-  }
-  selT = -1;
+  // Scale-box corners come first so they can be grabbed even when they sit on top of an item.
   const box = scaleBox();
   if (box) {
     const cs = [[box.x0, box.y0], [box.x1, box.y0], [box.x1, box.y1], [box.x0, box.y1]];
     for (let i = 0; i < 4; i++) {
       const c = { x: cs[i][0], y: cs[i][1] };
       if (dist(pt, c) < hr) {
-        const o = cs[(i + 2) % 4], list = selectedPaths();
+        const o = cs[(i + 2) % 4], list = selectedPaths().filter(pi => !paths[pi].hidden), tlist = selectedTexts();
         drag = {
           type: 'scale', pre: state(), corner: c, opp: { x: o[0], y: o[1] },
           center: { x: (box.x0 + box.x1) / 2, y: (box.y0 + box.y1) / 2 },
-          list, orig: list.map(pi => JSON.parse(JSON.stringify(paths[pi].nodes)))
+          list, orig: list.map(pi => JSON.parse(JSON.stringify(paths[pi].nodes))),
+          tlist, torig: tlist.map(ti => ({ x: texts[ti].x, y: texts[ti].y, size: texts[ti].size }))
         };
         return;
       }
     }
   }
+  const ti = hitText(e);
+  if (ti >= 0) {
+    const ts = selectedTexts();
+    if (e.shiftKey) {
+      const next = ts.includes(ti) ? ts.filter(j => j !== ti) : [...ts, ti];
+      selT = next.length ? next[0] : -1; extraT = next.slice(1); sel.n = -1;
+      render(); return;
+    }
+    // Pressing on text that's already selected drags the whole selection along with it.
+    if (!ts.includes(ti)) setSelection([], [ti]);
+    sel.n = -1;
+    drag = { type: 'move', list: selectedPaths(), tlist: selectedTexts(), last: pt, pre: state() }; render(); return;
+  }
   // Pressing on a path that's already part of a multi-selection drags the whole group.
   const hp = (e.target.dataset && e.target.dataset.p !== undefined) ? +e.target.dataset.p : -1;
   const keepGroup = hp >= 0 && !e.shiftKey && sel.n < 0 && selectedPaths().includes(hp);
-  if (!e.shiftKey && !keepGroup) extra = [];
+  if (!e.shiftKey && !keepGroup) { extra = []; selT = -1; extraT = []; }
   if (sel.p >= 0 && paths[sel.p] && !paths[sel.p].hidden) {
     const ns = paths[sel.p].nodes;
     for (let i = 0; i < ns.length; i++) for (const w of ['hi', 'ho']) {
@@ -796,11 +840,29 @@ function editDown(pt, e) {
       render(); return;
     }
     if (!keepGroup) sel = { p: i, n: -1 };
-    drag = { type: 'move', list: selectedPaths(), last: pt, pre: state() };
+    drag = { type: 'move', list: selectedPaths(), tlist: selectedTexts(), last: pt, pre: state() };
     render(); return;
   }
-  if (!e.shiftKey) sel = { p: -1, n: -1 };
+  // Empty space: start a selection box. Shift keeps what's already selected.
+  if (!e.shiftKey) setSelection([], []);
+  const samples = paths.map((p, pi) => {
+    if (p.hidden) return null;
+    const n = p.nodes, segs = p.closed ? n.length : n.length - 1, pts = n.slice();
+    for (let i = 0; i < segs; i++) for (let s = 1; s < 16; s++) pts.push(bez(n[i], n[(i + 1) % n.length], s / 16));
+    return pts;
+  });
+  const tboxes = texts.map((t, i) => t.hidden ? null : textBox(i));
+  drag = { type: 'marquee', a: pt, b: pt, samples, tboxes, baseP: selectedPaths(), baseT: selectedTexts() };
   render();
+}
+// Select every path with part of its outline inside the box, and every text the box touches.
+// (Outline rather than area, so a big background shape isn't grabbed by every drag.)
+function marqueeSelect(m) {
+  const x0 = Math.min(m.a.x, m.b.x), x1 = Math.max(m.a.x, m.b.x), y0 = Math.min(m.a.y, m.b.y), y1 = Math.max(m.a.y, m.b.y);
+  const inside = q => q.x >= x0 && q.x <= x1 && q.y >= y0 && q.y <= y1;
+  const ps = m.samples.map((pts, i) => pts && pts.some(inside) ? i : -1).filter(i => i >= 0);
+  const ts = m.tboxes.map((b, i) => b && b.x <= x1 && b.x + b.width >= x0 && b.y <= y1 && b.y + b.height >= y0 ? i : -1).filter(i => i >= 0);
+  setSelection([...new Set([...m.baseP, ...ps])], [...new Set([...m.baseT, ...ts])]);
 }
 
 /* ---------- circles ---------- */
@@ -817,7 +879,7 @@ function setCircle(p, c, r) {
 }
 function circleDown(pt) {
   snap();
-  const p = { nodes: [], closed: true, fill: newFill(), z: nextZ(), kind: 'circle' };
+  const p = { nodes: [], closed: true, fill: newFill(), ...newStroke(), z: nextZ(), kind: 'circle' };
   setCircle(p, pt, 0);
   paths.push(p);
   sel = { p: paths.length - 1, n: -1 };
@@ -833,7 +895,7 @@ function setRect(p, a, b) {
 }
 function rectDown(pt) {
   snap();
-  const p = { nodes: [], closed: true, fill: newFill(), z: nextZ(), kind: 'rect' };
+  const p = { nodes: [], closed: true, fill: newFill(), ...newStroke(), z: nextZ(), kind: 'rect' };
   setRect(p, pt, pt);
   paths.push(p);
   sel = { p: paths.length - 1, n: -1 };
@@ -866,9 +928,9 @@ svg.addEventListener('pointerdown', e => {
       return;
     }
   }
-  if (tool === 'pen') { extra = []; selT = -1; penDown(pt, e); }
-  else if (tool === 'circle') { extra = []; selT = -1; circleDown(pt); }
-  else if (tool === 'rect') { extra = []; selT = -1; rectDown(pt); }
+  if (tool === 'pen') { extra = []; selT = -1; extraT = []; penDown(pt, e); }
+  else if (tool === 'circle') { extra = []; selT = -1; extraT = []; circleDown(pt); }
+  else if (tool === 'rect') { extra = []; selT = -1; extraT = []; rectDown(pt); }
   else editDown(pt, e);
 });
 
@@ -893,6 +955,12 @@ svg.addEventListener('pointermove', e => {
       drag.list.forEach((pi, k) => {
         paths[pi].nodes = drag.orig[k].map(n => ({ ...n, x: a.x + (n.x - a.x) * sx, y: a.y + (n.y - a.y) * sy, hi: tf(n.hi), ho: tf(n.ho) }));
       });
+      // Text moves with the box and its font size scales too (by the average when stretched).
+      const ks = Math.sqrt(sx * sy);
+      drag.tlist.forEach((ti, j) => {
+        const o = drag.torig[j];
+        Object.assign(texts[ti], { x: a.x + (o.x - a.x) * sx, y: a.y + (o.y - a.y) * sy, size: Math.max(1, Math.round(o.size * ks * 10) / 10) });
+      });
       render(); break;
     }
     case 'move': {
@@ -902,10 +970,11 @@ svg.addEventListener('pointermove', e => {
         if (q.hi) { q.hi.x += dx; q.hi.y += dy; }
         if (q.ho) { q.ho.x += dx; q.ho.y += dy; }
       }));
+      (drag.tlist || []).forEach(ti => { texts[ti].x += dx; texts[ti].y += dy; });
       drag.last = pt; render(); break;
     }
-    case 'text':
-      drag.t.x += pt.x - drag.last.x; drag.t.y += pt.y - drag.last.y; drag.last = pt; render(); break;
+    case 'marquee':
+      drag.b = pt; marqueeSelect(drag); render(); break;
     case 'rect': {
       let dx = pt.x - drag.a.x, dy = pt.y - drag.a.y;
       if (e.shiftKey) { const s = Math.max(Math.abs(dx), Math.abs(dy)); dx = Math.sign(dx || 1) * s; dy = Math.sign(dy || 1) * s; }
@@ -943,7 +1012,7 @@ svg.addEventListener('pointermove', e => {
 
 function endDrag() {
   if (!drag) return;
-  const d = drag, wasEdit = d.type !== 'pan'; drag = null;
+  const d = drag, wasEdit = d.type !== 'pan' && d.type !== 'marquee'; drag = null;
   // A pen click that wobbled a few pixels shouldn't leave invisible stub handles behind.
   if (d.type === 'circle' && !(d.r > 2 / view.k)) { removePath(d.p); undoStack.pop(); }
   if (d.type === 'rect' && !(d.w > 2 / view.k && d.h > 2 / view.k)) { removePath(d.p); undoStack.pop(); }
@@ -979,10 +1048,13 @@ window.addEventListener('keydown', e => {
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+  if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); finishPath(); selectAll(); return; }
   if (mod) return;
   if (e.code === 'Space' && !spaceDown) { spaceDown = true; document.body.classList.add('panning'); e.preventDefault(); return; }
   switch (e.key) {
-    case 'Escape': case 'Enter': finishPath(); break;
+    case 'Escape': case 'Enter':
+      if (cur === null && tool === 'edit' && e.key === 'Escape') { setSelection([], []); render(); }
+      finishPath(); break;
     case 'Backspace': case 'Delete':
       e.preventDefault();
       if (tool === 'pen' && cur !== null) {
@@ -992,7 +1064,7 @@ window.addEventListener('keydown', e => {
       } else deleteSelected();
       break;
     case 'ArrowLeft': case 'ArrowRight': case 'ArrowUp': case 'ArrowDown': {
-      if ((sel.p < 0 || !paths[sel.p]) && !(selT >= 0 && texts[selT])) break;
+      if ((sel.p < 0 || !paths[sel.p]) && !selectedTexts().length) break;
       e.preventDefault();
       const s = e.shiftKey ? 10 : 1;
       const dx = e.key === 'ArrowLeft' ? -s : e.key === 'ArrowRight' ? s : 0;
@@ -1219,6 +1291,10 @@ async function importSVG(file) {
       let subs;
       try { subs = parsePathD(shapeToD(el)); } catch (err) { continue; }
       const fill = el.localName === 'line' ? null : cssColorToHex(cs.fill, shadow);
+      // No stroke in the file becomes width 0; the color then defaults to the current stroke color.
+      const strokeHex = cssColorToHex(cs.stroke, shadow);
+      const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1;
+      const stroke = strokeHex || style.color, sw = strokeHex ? Math.round(parseFloat(cs.strokeWidth || '1') * scale * 100) / 100 : 0;
       for (const sp of subs) {
         if (sp.nodes.length < 2) continue;
         sp.nodes.forEach(n => {
@@ -1229,7 +1305,7 @@ async function importSVG(file) {
             n.corner = !(la && lb && (ax * bx + ay * by) / (la * lb) < -0.999);
           }
         });
-        items.push({ p: { nodes: sp.nodes, closed: sp.closed, fill, kind: el.localName === 'rect' ? 'rect' : (el.localName === 'circle' ? 'circle' : undefined) } });
+        items.push({ p: { nodes: sp.nodes, closed: sp.closed, fill, stroke, sw, kind: el.localName === 'rect' ? 'rect' : (el.localName === 'circle' ? 'circle' : undefined) } });
       }
     }
     if (!items.length) { alert('No shapes or text were found in that SVG.'); return; }
@@ -1237,14 +1313,14 @@ async function importSVG(file) {
     const emptyBoard = !paths.length && !texts.length && !hasImage;
     if (emptyBoard) setDoc(Math.round(w), Math.round(h));
     let z = nextZ();
-    const added = [];
+    const added = [], addedT = [];
     items.forEach(it => {
       if (it.p) { it.p.z = z++; paths.push(it.p); added.push(paths.length - 1); }
-      else { it.t.z = z++; texts.push(it.t); }
+      else { it.t.z = z++; texts.push(it.t); addedT.push(texts.length - 1); }
     });
     setTool('edit');
     // Select the imported shapes so they can be moved or scaled right away.
-    selT = -1; sel = { p: added.length ? added[0] : -1, n: -1 }; extra = added.slice(1);
+    setSelection(added, addedT);
     if (emptyBoard) fit(); else render();
     save();
   } catch (err) {
@@ -1281,24 +1357,32 @@ function flipAll(axis) {
   applyFlip(); render(); save();
 }
 $('opacity').oninput = e => img.setAttribute('opacity', e.target.value);
-$('color').oninput = e => { style.color = e.target.value; render(); save(); };
-$('width').oninput = e => { const v = parseFloat(e.target.value); if (v >= 0) { style.width = v; render(); save(); } };
+// Stroke controls set the default for new paths and change only the selected paths.
+// Dragging around the color picker (or typing a width) counts as one undo step.
+let strokeUndoOpen = false;
+function applyStroke(key, v) {
+  if (key === 'stroke') style.color = v; else style.width = v;
+  const list = selectedPaths();
+  if (list.length && !strokeUndoOpen) { snap(); strokeUndoOpen = true; }
+  list.forEach(i => { paths[i][key] = v; });
+  render(); save();
+}
+$('color').oninput = e => applyStroke('stroke', e.target.value);
+$('color').onchange = () => { strokeUndoOpen = false; };
+$('width').oninput = e => { const v = parseFloat(e.target.value); if (v >= 0) applyStroke('sw', v); };
+$('width').onchange = () => { strokeUndoOpen = false; };
 // Fill controls set the default for new paths and recolor any selected paths.
 // Dragging around the color picker counts as one undo step.
 let fillUndoOpen = false;
 function applyFill(on, color) {
   if (editT) { editT.color = color; style.fill = color; placeEditor(); save(); return; }
-  if (selT >= 0 && texts[selT]) {
-    // Text always has a color, so the checkbox doesn't apply to it.
-    if (!fillUndoOpen) { snap(); fillUndoOpen = true; }
-    texts[selT].color = color; style.fill = color; render(); save(); return;
-  }
-  style.fillOn = on; style.fill = color;
-  const list = selectedPaths();
-  if (list.length) {
-    if (!fillUndoOpen) { snap(); fillUndoOpen = true; }
-    list.forEach(i => { paths[i].fill = on ? color : null; });
-  }
+  const list = selectedPaths(), ts = selectedTexts();
+  style.fill = color;
+  // Text always has a color, so the checkbox only matters when paths are involved.
+  if (list.length || !ts.length) style.fillOn = on;
+  if (list.length || ts.length) { if (!fillUndoOpen) { snap(); fillUndoOpen = true; } }
+  list.forEach(i => { paths[i].fill = on ? color : null; });
+  ts.forEach(i => { texts[i].color = color; });
   render(); save();
 }
 $('fill-on').onchange = e => { fillUndoOpen = false; applyFill(e.target.checked, $('fill').value); fillUndoOpen = false; };
@@ -1309,9 +1393,9 @@ $('tsize').oninput = e => {
   const v = parseFloat(e.target.value); if (!(v > 0)) return;
   style.textSize = v;
   if (editT) { editT.size = v; placeEditor(); }
-  else if (selT >= 0 && texts[selT]) {
+  else if (selectedTexts().length) {
     if (!sizeUndoOpen) { snap(); sizeUndoOpen = true; }
-    texts[selT].size = v; render();
+    selectedTexts().forEach(i => { texts[i].size = v; }); render();
   }
   save();
 };
@@ -1321,7 +1405,7 @@ $('tfont').onchange = e => {
   if (v === '__more') { syncFill(); loadAllFonts(); return; }
   style.font = v;
   if (editT) { editT.font = v; placeEditor(); }
-  else if (selT >= 0 && texts[selT]) { snap(); texts[selT].font = v; render(); }
+  else if (selectedTexts().length) { snap(); selectedTexts().forEach(i => { texts[i].font = v; }); render(); }
   save();
 };
 $('docw').onchange = resizeCanvas;
@@ -1335,17 +1419,21 @@ $('del').onclick = deleteSelected;
 $('clear').onclick = () => {
   commitText(true);
   if (!paths.length && !texts.length) return;
-  snap(); paths = []; texts = []; selT = -1; extra = []; cur = null; sel = { p: -1, n: -1 }; render(); save();
+  snap(); paths = []; texts = []; selT = -1; extraT = []; extra = []; cur = null; sel = { p: -1, n: -1 }; render(); save();
 };
 
 // Everything goes in one group in stacking order. Hidden items are left out.
 function buildSVG() {
   const body = layerItems().filter(it => !it.ref.hidden).map(({ k, ref }) => {
-    if (k === 'p') return ref.nodes.length > 1 ? `    <path${ref.fill ? ` fill="${ref.fill}"` : ''} d="${pathD(ref)}"/>` : '';
+    if (k === 'p') {
+      if (ref.nodes.length < 2) return '';
+      const st = ref.sw > 0 ? ` stroke="${ref.stroke}" stroke-width="${ref.sw}"` : ' stroke="none"';
+      return `    <path${ref.fill ? ` fill="${ref.fill}"` : ''}${st} d="${pathD(ref)}"/>`;
+    }
     return `    <text x="${f(ref.x)}" y="${f(ref.y)}" stroke="none" font-family="${esc(fontStack(ref.font))}" font-size="${ref.size}" fill="${ref.color}" text-anchor="middle" dominant-baseline="central">${esc(ref.text)}</text>`;
   }).filter(Boolean).join('\n');
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${doc.w}" height="${doc.h}" viewBox="0 0 ${doc.w} ${doc.h}">\n` +
-    `  <g fill="none" stroke="${style.color}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round">\n` +
+    `  <g fill="none" stroke-linecap="round" stroke-linejoin="round">\n` +
     body + `\n  </g>\n</svg>\n`;
 }
 
@@ -1364,7 +1452,7 @@ function renderLayers() {
     const r = it.ref, cls = 'layer' + (isSelected(it) ? ' on' : '') + (r.hidden ? ' off' : '');
     const sw = it.k === 't'
       ? `<span class="sw" style="color:${r.color};font-family:${esc(fontStack(r.font))}">T</span>`
-      : `<span class="sw" style="background:${r.fill || 'transparent'};border:2px solid ${style.color}"></span>`;
+      : `<span class="sw" style="background:${r.fill || 'transparent'};border:2px solid ${r.sw > 0 ? r.stroke : 'transparent'}"></span>`;
     return `<li class="${cls}" draggable="true" data-k="${it.k}" data-i="${it.i}">` +
       `<button class="eye" data-eye aria-label="${r.hidden ? 'Show' : 'Hide'} ${esc(layerName(it))}" title="${r.hidden ? 'Show' : 'Hide'}">${r.hidden ? EYE_OFF : EYE}</button>` +
       `${sw}<span class="lname">${esc(layerName(it))}</span></li>`;
@@ -1381,15 +1469,12 @@ const rowItem = li => ({ k: li.dataset.k, i: +li.dataset.i });
 const refOf = ({ k, i }) => k === 'p' ? paths[i] : texts[i];
 function selectLayer(it, add) {
   if (tool !== 'edit' && tool !== 'pan') setTool('edit'); else { commitText(); finishPath(); }
-  if (it.k === 't') { selT = it.i; sel = { p: -1, n: -1 }; extra = []; }
-  else {
-    selT = -1;
-    if (add && sel.p >= 0) {
-      const set = selectedPaths();
-      if (set.includes(it.i)) { const rest = set.filter(j => j !== it.i); sel = { p: rest.length ? rest[0] : -1, n: -1 }; extra = rest.slice(1); }
-      else { sel.n = -1; extra.push(it.i); }
-    } else { sel = { p: it.i, n: -1 }; extra = []; }
-  }
+  // Shift-click toggles the row in the selection; a plain click selects only that row.
+  const ps = selectedPaths(), ts = selectedTexts();
+  const toggle = (arr, i) => arr.includes(i) ? arr.filter(j => j !== i) : [...arr, i];
+  if (!add) setSelection(it.k === 'p' ? [it.i] : [], it.k === 't' ? [it.i] : []);
+  else if (it.k === 'p') setSelection(toggle(ps, it.i), ts);
+  else setSelection(ps, toggle(ts, it.i));
   render();
 }
 const layerList = $('layer-list'), list = layerList;
@@ -1399,7 +1484,7 @@ list.addEventListener('click', e => {
   if (e.target.closest('[data-eye]')) {
     commitText(); snap();
     ref.hidden = !ref.hidden;
-    if (ref.hidden) { if (it.k === 't' && selT === it.i) selT = -1; if (it.k === 'p' && selectedPaths().includes(it.i)) { sel = { p: -1, n: -1 }; extra = []; } }
+    if (ref.hidden) setSelection(selectedPaths().filter(j => !(it.k === 'p' && j === it.i)), selectedTexts().filter(j => !(it.k === 't' && j === it.i)));
     render(); save(); return;
   }
   selectLayer(it, e.shiftKey);
