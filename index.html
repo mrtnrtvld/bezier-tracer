@@ -70,7 +70,7 @@ body[data-tool="pen"] #svg,body[data-tool="circle"] #svg,body[data-tool="rect"] 
 #shape-opts[hidden],#shape-opts [hidden]{display:none}
 body[data-tool="pan"] #svg,body.panning #svg{cursor:grab}
 .board{fill:var(--board)}
-.trace{stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+.trace{pointer-events:none}
 .hit{stroke:transparent;pointer-events:none}
 body[data-tool="edit"] .hit{pointer-events:stroke;cursor:move}
 body[data-tool="edit"] .hit.filled{pointer-events:visiblePainted}
@@ -210,6 +210,10 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
     <label class="ctl">Stroke <input type="color" id="color" value="#2f6fd6" aria-label="Stroke color"></label>
     <input type="number" id="width" min="0" max="40" step="0.5" value="3" aria-label="Stroke width" title="Stroke width (0 for no outline)">
   </div>
+  <div class="group" title="Stroke pattern and line ends">
+    <select id="dash" aria-label="Stroke pattern" title="Stroke pattern"><option value="solid">Solid</option><option value="dash">Dashed</option><option value="dot">Dotted</option></select>
+    <select id="cap" aria-label="Line ends" title="Line ends and corners"><option value="round">Round ends</option><option value="butt">Flat ends</option><option value="square">Square ends</option></select>
+  </div>
   <div class="group" title="Fill for the selected paths and for new paths">
     <label class="ctl">Fill <input type="checkbox" id="fill-on" aria-label="Fill on"></label>
     <input type="color" id="fill" value="#f2c94c" aria-label="Fill color">
@@ -219,6 +223,9 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
     <button id="tbold" aria-pressed="false" title="Bold (⌘B)" aria-label="Bold" style="font-weight:700">B</button>
     <button id="titalic" aria-pressed="false" title="Italic (⌘I)" aria-label="Italic" style="font-style:italic;font-family:Georgia,serif">I</button>
     <label class="ctl">Size <input type="number" id="tsize" min="4" max="400" step="1" value="32" aria-label="Text size"></label>
+  </div>
+  <div class="group" title="Opacity of the selected shapes and text, and of new ones">
+    <label class="ctl">Opacity <input type="number" id="op" min="0" max="100" step="5" value="100" aria-label="Opacity percent"></label>
   </div>
   <div class="group" id="shape-opts">
     <label class="ctl" id="opt-radius" title="Corner radius for rectangles">Corners <input type="number" id="radius" min="0" max="5000" step="1" value="0" aria-label="Corner radius"></label>
@@ -286,7 +293,7 @@ let texts = [];            // [{x, y, text, size, color, font, bold, italic, rot
 let selT = -1;             // index of the selected text, or -1
 let editT = null;          // text being typed: {i (-1 for new), x, y, size, color}
 let style = { color: '#2f6fd6', width: 3, fill: '#f2c94c', fillOn: false, textSize: 32, font: 'Figtree', bold: false, italic: false,
-  snap: true, grid: false, gridSnap: false, gridSize: 20, radius: 0, sides: 6, points: 5, inner: 45 };
+  snap: true, grid: false, gridSnap: false, gridSize: 20, radius: 0, sides: 6, points: 5, inner: 45, dash: 'solid', cap: 'round', op: 100 };
 let hover = null, drag = null, spaceDown = false, hasImage = false;
 let lastTap = { t: 0, x: 0, y: 0 };
 let extra = []; // additional selected paths (Shift-click)
@@ -334,7 +341,7 @@ function load() {
 function normStroke() {
   paths.forEach(p => { if (p.stroke == null) p.stroke = style.color; if (p.sw == null) p.sw = style.width; });
 }
-const newStroke = () => ({ stroke: style.color, sw: style.width });
+const newStroke = () => ({ stroke: style.color, sw: style.width, dash: style.dash, cap: style.cap, op: style.op ?? 100 });
 
 /* ---------- stacking order ---------- */
 // Paths and texts share one stacking order through their `z` value (higher = in front).
@@ -430,7 +437,7 @@ function ungroupSel() {
   [...paths, ...texts].forEach(r => { if (gs.has(r.g)) delete r.g; });
   normStructure(); selectRefs(keep); render(); save();
 }
-const STYLE_KEYS = ['fill', 'stroke', 'sw'];
+const STYLE_KEYS = ['fill', 'stroke', 'sw', 'dash', 'cap', 'op'];
 function combineSel() {
   const [ps] = expandSel(selectedPaths(), []);
   if (ps.length < 2) return;
@@ -482,6 +489,9 @@ function syncFill() {
   $('tbold').setAttribute('aria-pressed', String(!!(t ? t.bold : style.bold)));
   $('titalic').setAttribute('aria-pressed', String(!!(t ? t.italic : style.italic)));
   const list = selectedPaths(), p = list.length ? paths[list[0]] : null;
+  $('dash').value = p ? (p.dash || 'solid') : style.dash;
+  $('cap').value = p ? (p.cap || 'round') : style.cap;
+  if (document.activeElement !== $('op')) { const o = p || (selT >= 0 && texts[selT]) || null; $('op').value = o ? (o.op ?? 100) : (style.op ?? 100); }
   // Stroke controls show the selected path's stroke, or the default for new paths.
   $('color').value = p ? p.stroke : style.color;
   if (document.activeElement !== $('width')) $('width').value = p ? p.sw : style.width;
@@ -512,6 +522,16 @@ function seg(a, b) {
   const c1 = a.ho || a, c2 = b.hi || b;
   return `C${f(c1.x)} ${f(c1.y)} ${f(c2.x)} ${f(c2.y)} ${f(b.x)} ${f(b.y)}`;
 }
+// Stroke details shared by the canvas and the export. Dotted lines need round ends to show dots.
+function lookAttrs(p) {
+  const sw = p.sw || 0, cap = p.dash === 'dot' ? 'round' : (p.cap || 'round');
+  let a = ` stroke-linecap="${cap}" stroke-linejoin="${cap === 'round' ? 'round' : 'miter'}"`;
+  if (sw > 0 && p.dash === 'dash') a += ` stroke-dasharray="${f(sw * 3)} ${f(sw * 2)}"`;
+  if (sw > 0 && p.dash === 'dot') a += ` stroke-dasharray="0 ${f(sw * 2)}"`;
+  if (p.op != null && p.op < 100) a += ` opacity="${Math.max(0, p.op) / 100}"`;
+  return a;
+}
+const opAttr = t => t.op != null && t.op < 100 ? ` opacity="${Math.max(0, t.op) / 100}"` : '';
 const combinedD = cp => paths.filter(q => q.cp === cp && !q.hidden).sort((a, b) => a.z - b.z).map(pathD).join('');
 function pathD(p) {
   const n = p.nodes; if (!n.length) return '';
@@ -690,12 +710,12 @@ function render() {
         doneCp.add(p.cp);
         d = combinedD(p.cp); fr = ` fill-rule="${p.fr || 'evenodd'}"`;
       } else d = pathD(p);
-      s += `<path class="trace" d="${d}"${fr} fill="${p.fill || 'none'}" stroke="${p.stroke}" stroke-width="${p.sw}"/>`;
+      s += `<path class="trace" d="${d}"${fr} fill="${p.fill || 'none'}" stroke="${p.stroke}" stroke-width="${p.sw}"${lookAttrs(p)}/>`;
       s += `<path class="hit${p.fill ? ' filled' : ''}" data-p="${i}" d="${d}"${fr} fill="${p.fill ? 'transparent' : 'none'}" stroke-width="${14 / k}"/>`;
     } else {
       const t = ref;
       if (editT && editT.i === i) return; // hidden while its editor is open
-      s += `<text class="label" data-t="${i}" x="${f(t.x)}" y="${f(t.y)}"${t.rot ? ` transform="rotate(${f(t.rot)} ${f(t.x)} ${f(t.y)})"` : ''}${textAttrs(t)} fill="${t.color}" text-anchor="middle" dominant-baseline="central">${textBody(t)}</text>`;
+      s += `<text class="label" data-t="${i}" x="${f(t.x)}" y="${f(t.y)}"${t.rot ? ` transform="rotate(${f(t.rot)} ${f(t.x)} ${f(t.y)})"` : ''}${textAttrs(t)}${opAttr(t)} fill="${t.color}" text-anchor="middle" dominant-baseline="central">${textBody(t)}</text>`;
     }
   });
   pathsG.innerHTML = s;
@@ -1016,7 +1036,7 @@ function commitText(cancel) {
   editT = null; ed.hidden = true;
   if (!cancel) {
     if (e.i < 0) {
-      if (v.trim()) { snap(); texts.push({ x: e.x, y: e.y, text: v, size: e.size, color: e.color, font: e.font, bold: e.bold, italic: e.italic, z: nextZ() }); selT = texts.length - 1; extraT = []; }
+      if (v.trim()) { snap(); texts.push({ x: e.x, y: e.y, text: v, size: e.size, color: e.color, font: e.font, bold: e.bold, italic: e.italic, op: style.op ?? 100, z: nextZ() }); selT = texts.length - 1; extraT = []; }
     } else if (!v.trim()) { snap(); texts.splice(e.i, 1); selT = -1; }
     else {
       const t = texts[e.i];
@@ -1736,6 +1756,9 @@ async function importSVG(file) {
       // No stroke in the file becomes width 0; the color then defaults to the current stroke color.
       const strokeHex = cssColorToHex(cs.stroke, shadow);
       const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1;
+      let op = 1; for (let n = el; n && n !== s.parentNode; n = n.parentElement) op *= parseFloat(getComputedStyle(n).opacity) || (getComputedStyle(n).opacity === '0' ? 0 : 1);
+      const look = { op: Math.round(op * 100), dash: cs.strokeDasharray && cs.strokeDasharray !== 'none' ? 'dash' : 'solid',
+        cap: cs.strokeLinecap === 'butt' ? 'butt' : cs.strokeLinecap === 'square' ? 'square' : 'round' };
       const stroke = strokeHex || style.color, sw = strokeHex ? Math.round(parseFloat(cs.strokeWidth || '1') * scale * 100) / 100 : 0;
       // An element with several contours (like the letter O) becomes a combined shape, so its holes stay holes.
       const parts = subs.filter(sp => sp.nodes.length >= 2), ck = parts.length > 1 ? elNo : undefined;
@@ -1748,7 +1771,7 @@ async function importSVG(file) {
             n.corner = !(la && lb && (ax * bx + ay * by) / (la * lb) < -0.999);
           }
         });
-        items.push({ gk, ck, fr: cs.fillRule === 'evenodd' ? 'evenodd' : 'nonzero', p: { nodes: sp.nodes, closed: sp.closed, fill, stroke, sw, kind: el.localName === 'rect' ? 'rect' : (el.localName === 'circle' ? 'circle' : undefined) } });
+        items.push({ gk, ck, fr: cs.fillRule === 'evenodd' ? 'evenodd' : 'nonzero', p: { nodes: sp.nodes, closed: sp.closed, fill, stroke, sw, ...look, kind: el.localName === 'rect' ? 'rect' : (el.localName === 'circle' ? 'circle' : undefined) } });
       }
     }
     if (!items.length) { alert('No shapes or text were found in that SVG.'); return; }
@@ -1982,6 +2005,20 @@ $('color').oninput = e => applyStroke('stroke', e.target.value);
 $('color').onchange = () => { strokeUndoOpen = false; };
 $('width').oninput = e => { const v = parseFloat(e.target.value); if (v >= 0) applyStroke('sw', v); };
 $('width').onchange = () => { strokeUndoOpen = false; };
+// Dash, ends and opacity work like the stroke controls; opacity also applies to text.
+let lookUndoOpen = false;
+function applyLook(key, v) {
+  style[key] = v;
+  const ps = selectedPaths(), ts = key === 'op' ? selectedTexts() : [];
+  if ((ps.length || ts.length) && !lookUndoOpen) { snap(); lookUndoOpen = true; }
+  ps.forEach(i => { paths[i][key] = v; });
+  ts.forEach(i => { texts[i][key] = v; });
+  render(); save();
+}
+$('dash').onchange = e => { lookUndoOpen = false; applyLook('dash', e.target.value); lookUndoOpen = false; };
+$('cap').onchange = e => { lookUndoOpen = false; applyLook('cap', e.target.value); lookUndoOpen = false; };
+$('op').oninput = e => { const v = +e.target.value; if (v >= 0 && v <= 100) applyLook('op', v); };
+$('op').onchange = () => { lookUndoOpen = false; };
 // Fill controls set the default for new paths and recolor any selected paths.
 // Dragging around the color picker counts as one undo step.
 let fillUndoOpen = false;
@@ -2066,10 +2103,10 @@ function svgPath(ref, pad) {
   if (ref.cp == null && ref.nodes.length < 2) return '';
   const st = ref.sw > 0 ? ` stroke="${ref.stroke}" stroke-width="${ref.sw}"` : ' stroke="none"';
   const d = ref.cp != null ? combinedD(ref.cp) : pathD(ref), fr = ref.cp != null ? ` fill-rule="${ref.fr || 'evenodd'}"` : '';
-  return `${pad}<path${ref.fill ? ` fill="${ref.fill}"` : ''}${st}${fr} d="${d}"/>`;
+  return `${pad}<path${ref.fill ? ` fill="${ref.fill}"` : ''}${st}${ref.sw > 0 ? lookAttrs(ref) : opAttr(ref)}${fr} d="${d}"/>`;
 }
 function svgText(ref, pad) {
-  return `${pad}<text x="${f(ref.x)}" y="${f(ref.y)}"${ref.rot ? ` transform="rotate(${f(ref.rot)} ${f(ref.x)} ${f(ref.y)})"` : ''} stroke="none"${textAttrs(ref)} fill="${ref.color}" text-anchor="middle" dominant-baseline="central">${textBody(ref)}</text>`;
+  return `${pad}<text x="${f(ref.x)}" y="${f(ref.y)}"${ref.rot ? ` transform="rotate(${f(ref.rot)} ${f(ref.x)} ${f(ref.y)})"` : ''} stroke="none"${textAttrs(ref)}${opAttr(ref)} fill="${ref.color}" text-anchor="middle" dominant-baseline="central">${textBody(ref)}</text>`;
 }
 function buildSVG() {
   const lines = [], doneCp = new Set();
@@ -2088,7 +2125,7 @@ function buildSVG() {
   });
   if (openG != null) lines.push('    </g>');
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${doc.w}" height="${doc.h}" viewBox="0 0 ${doc.w} ${doc.h}">\n` +
-    `  <g fill="none" stroke-linecap="round" stroke-linejoin="round">\n` +
+    `  <g fill="none">\n` +
     lines.filter(Boolean).join('\n') + `\n  </g>\n</svg>\n`;
 }
 
