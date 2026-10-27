@@ -46,6 +46,16 @@ input[type=number]{width:56px;font:inherit;color:var(--ink);background:var(--btn
 input.dim{width:68px}
 input[type=color]{width:32px;height:28px;padding:0;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer}
 .spacer{flex:1}
+.docname{border-color:transparent;background:none;color:var(--muted);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.docname:hover{color:var(--ink)}
+.docs-list{list-style:none;margin:0 0 10px;padding:0;max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:8px}
+.docs-list li{display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--line)}
+.docs-list li:last-child{border-bottom:none}
+.docs-list .dn{flex:1;min-width:0;text-align:left;border:none;background:none;padding:4px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.docs-list .dn:hover{background:var(--btn)}
+.docs-list .when{color:var(--muted);font-size:12px;white-space:nowrap}
+.docs-list li.cur .dn{font-weight:600}
+.docs-list button.sm{padding:3px 8px;font-size:13px}
 .bar.props{gap:8px 22px;padding:6px 12px}
 .menu{position:relative}
 .menu>summary{list-style:none;font:inherit;color:var(--ink);background:var(--btn);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer;line-height:1.3;user-select:none}
@@ -159,8 +169,17 @@ label.opt{color:var(--ink);margin-bottom:6px}
   </div>
   <div class="group">
     <details class="menu" id="m-file"><summary>File</summary><div class="menu-pop" id="file-pop">
+      <button class="mi" id="f-new">New drawing</button>
+      <button class="mi" id="f-open">Open drawing…</button>
+      <button class="mi" id="f-rename">Rename…</button>
+      <button class="mi" id="f-dupdoc">Duplicate drawing</button>
+      <hr>
+      <button class="mi" id="f-saveproj" title="Download everything, including the sketch, as one file you can open again here or on another computer">Save project file…</button>
+      <label class="filebtn mi">Open project file…<input type="file" id="projfile" accept=".json,.bztrace,application/json"></label>
+      <hr>
       <label class="filebtn mi" title="Bring in the shapes and text from an SVG file as editable paths">Import SVG…<input type="file" id="svgfile" accept=".svg,image/svg+xml"></label>
     </div></details>
+    <button id="docname" class="docname" title="Rename this drawing">Untitled</button>
     <details class="menu" id="m-sketch"><summary>Sketch</summary><div class="menu-pop">
       <label class="filebtn mi">Load sketch…<input type="file" id="file" accept="image/*"></label>
       <label class="mi ctl">Opacity <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.5" aria-label="Sketch opacity"></label>
@@ -277,6 +296,16 @@ label.opt{color:var(--ink);margin-bottom:6px}
 
 <div class="hint" id="hint"></div>
 
+<dialog id="docs-dlg" aria-labelledby="docs-title">
+  <div class="dlg-head">
+    <h2 id="docs-title">Your drawings</h2>
+    <button id="docs-new" class="primary">New drawing</button>
+  </div>
+  <ul class="docs-list" id="docs-list"></ul>
+  <p class="note">Drawings are saved in this browser only. To keep a copy or move a drawing to another computer, use File › Save project file.</p>
+  <div class="dlg-actions"><button id="docs-close">Close</button></div>
+</dialog>
+
 <dialog id="dlg" aria-labelledby="dlg-title">
   <div class="dlg-head">
     <h2 id="dlg-title">Export</h2>
@@ -359,17 +388,75 @@ function restore(s) {
 function undo() { if (!undoStack.length) return; redoStack.push(state()); restore(undoStack.pop()); }
 function redo() { if (!redoStack.length) return; undoStack.push(state()); restore(redoStack.pop()); }
 
+/* ---------- saving: settings plus one record per drawing ---------- */
+// localStorage holds the settings, a list of drawings and each drawing's shapes; sketch images
+// (often too big for localStorage) live in IndexedDB under the drawing's id.
+const K_PREFS = 'bezier-tracer-prefs', K_INDEX = 'bezier-tracer-docs', K_CUR = 'bezier-tracer-current', K_DOC = id => 'bezier-tracer-doc:' + id;
+let docId = null, docName = 'Untitled', storageWarned = false;
+const lsGet = k => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } };
+function lsSet(k, v) {
+  try { localStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v)); return true; }
+  catch (e) {
+    if (!storageWarned) { storageWarned = true; alert('This browser’s storage is full, so changes aren’t being saved. Use File › Save project file to keep your work.'); }
+    return false;
+  }
+}
+const docIndex = () => lsGet(K_INDEX) || [];
+const newDocId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const docData = () => ({ name: docName, paths, texts, doc, flip, sketchOp: +$('opacity').value });
 function save() {
-  try { localStorage.setItem('bezier-tracer-v1', JSON.stringify({ paths, texts, doc, style })); } catch (e) {}
+  lsSet(K_PREFS, style);
+  if (!docId) return;
+  lsSet(K_DOC(docId), docData());
+  lsSet(K_INDEX, [{ id: docId, name: docName, updated: Date.now() }, ...docIndex().filter(d => d.id !== docId)]);
+  lsSet(K_CUR, docId);
 }
 function load() {
-  try {
-    const o = JSON.parse(localStorage.getItem('bezier-tracer-v1') || 'null');
-    if (o) { paths = o.paths || []; texts = o.texts || []; doc = o.doc || doc; style = { ...style, ...o.style }; }
-  } catch (e) {}
-  normZ(); normStroke(); normStructure();
+  style = { ...style, ...(lsGet(K_PREFS) || {}) };
+  // Move a drawing saved by the older single-drawing version into the list.
+  const old = lsGet('bezier-tracer-v1'), migrate = !docIndex().length && !!old;
+  if (migrate) {
+    style = { ...style, ...(old.style || {}) };
+    const id = newDocId();
+    lsSet(K_DOC(id), { name: 'Untitled', paths: old.paths || [], texts: old.texts || [], doc: old.doc || doc });
+    lsSet(K_INDEX, [{ id, name: 'Untitled', updated: Date.now() }]);
+    lsSet(K_CUR, id);
+  }
+  let id = localStorage.getItem(K_CUR);
+  try { id = JSON.parse(id); } catch (e) {}
+  if (!id || !lsGet(K_DOC(id))) id = docIndex()[0]?.id;
+  if (!id || !lsGet(K_DOC(id))) { id = newDocId(); lsSet(K_DOC(id), { name: 'Untitled', paths: [], texts: [], doc }); }
+  docId = id;
+  applyDocData(lsGet(K_DOC(id)));
+  if (migrate) save();
   $('color').value = style.color; $('width').value = style.width;
 }
+function applyDocData(d) {
+  paths = d.paths || []; texts = d.texts || []; doc = d.doc || { w: 1000, h: 750 };
+  flip = d.flip || { h: false, v: false }; docName = d.name || 'Untitled';
+  cur = null; sel = { p: -1, n: -1 }; extra = []; selT = -1; extraT = []; undoStack = []; redoStack = [];
+  normZ(); normStroke(); normStructure();
+  $('opacity').value = d.sketchOp ?? 0.5; img.setAttribute('opacity', $('opacity').value);
+  $('docname').textContent = docName; document.title = `${docName} – Bézier tracer`;
+}
+// A tiny IndexedDB key/value store for sketch images.
+const idb = (() => {
+  let dbp = null;
+  const open = () => dbp || (dbp = new Promise((res, rej) => {
+    const r = indexedDB.open('bezier-tracer', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('sketches');
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  }));
+  const run = (mode, fn) => open().then(db => new Promise((res, rej) => {
+    const t = db.transaction('sketches', mode), q = fn(t.objectStore('sketches'));
+    t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error);
+  }));
+  return {
+    get: k => run('readonly', st => st.get(k)).catch(() => null),
+    set: (k, v) => run('readwrite', st => st.put(v, k)).catch(() => null),
+    del: k => run('readwrite', st => st.delete(k)).catch(() => null)
+  };
+})();
 // Each path has its own stroke color and width. Paths saved before that existed take the old shared stroke.
 function normStroke() {
   paths.forEach(p => { if (p.stroke == null) p.stroke = style.color; if (p.sw == null) p.sw = style.width; });
@@ -1576,6 +1663,14 @@ window.addEventListener('keyup', e => { if (e.code === 'Space') { spaceDown = fa
 function zoomCenter(fct) { const r = svg.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, fct); }
 
 /* ---------- image loading ---------- */
+let sketch = null;   // { url, w, h } of the current sketch image
+function showSketch(sk) {
+  sketch = sk;
+  if (sk) { img.setAttribute('width', sk.w); img.setAttribute('height', sk.h); img.setAttribute('href', sk.url); }
+  else img.removeAttribute('href');
+  hasImage = !!sk; $('clear-sketch').disabled = !sk;
+  render();
+}
 function loadImage(file) {
   if (!file || !file.type.startsWith('image/')) return;
   const reader = new FileReader();
@@ -1584,10 +1679,10 @@ function loadImage(file) {
     im.onload = () => {
       // The sketch keeps its own size; the canvas starts out matching it.
       if (im.naturalWidth !== doc.w || im.naturalHeight !== doc.h) snap();
-      img.setAttribute('width', im.naturalWidth); img.setAttribute('height', im.naturalHeight);
       setDoc(im.naturalWidth, im.naturalHeight);
-      img.setAttribute('href', reader.result);
-      hasImage = true; $('clear-sketch').disabled = false; fit(); save();
+      showSketch({ url: reader.result, w: im.naturalWidth, h: im.naturalHeight });
+      idb.set(docId, sketch);
+      fit(); save();
     };
     im.src = reader.result;
   };
@@ -2007,11 +2102,8 @@ $('t-text').onclick = () => setTool('text');
 $('flip-h').onclick = () => flipAll('h');
 $('flip-v').onclick = () => flipAll('v');
 $('clear-sketch').onclick = () => {
-  img.removeAttribute('href');
-  hasImage = false;
-  flip = { h: false, v: false }; applyFlip();
-  $('clear-sketch').disabled = true;
-  render();
+  showSketch(null); idb.del(docId);
+  flip = { h: false, v: false }; applyFlip(); save();
 };
 // Mirror the sketch and every path together so they stay aligned.
 function flipAll(axis) {
@@ -2023,7 +2115,7 @@ function flipAll(axis) {
   flip[axis] = !flip[axis];
   applyFlip(); render(); save();
 }
-$('opacity').oninput = e => img.setAttribute('opacity', e.target.value);
+$('opacity').oninput = e => { img.setAttribute('opacity', e.target.value); save(); };
 // Stroke controls set the default for new paths and change only the selected paths.
 // Dragging around the color picker (or typing a width) counts as one undo step.
 let strokeUndoOpen = false;
@@ -2313,8 +2405,103 @@ $('z-front').onclick = () => arrange('front');
 $('z-up').onclick = () => arrange('up');
 $('z-down').onclick = () => arrange('down');
 $('z-back').onclick = () => arrange('back');
+/* ---------- drawings ---------- */
+function openDoc(id) {
+  const d = lsGet(K_DOC(id)); if (!d) return;
+  commitText(true); finishPath(); save();
+  docId = id; applyDocData(d); lsSet(K_CUR, id);
+  showSketch(null);
+  idb.get(id).then(sk => { if (sk && docId === id) showSketch(sk); });
+  setDoc(doc.w, doc.h); applyFlip(); fit(); save();
+}
+function uniqueName(base) {
+  const names = new Set(docIndex().map(d => d.name));
+  if (!names.has(base)) return base;
+  let n = 2; while (names.has(`${base} ${n}`)) n++;
+  return `${base} ${n}`;
+}
+function newDoc(data, name, sk) {
+  save();
+  const id = newDocId(), nm = uniqueName(name || 'Untitled');
+  lsSet(K_DOC(id), { paths: [], texts: [], doc: { w: doc.w, h: doc.h }, ...data, name: nm });
+  lsSet(K_INDEX, [{ id, name: nm, updated: Date.now() }, ...docIndex()]);
+  if (sk) idb.set(id, sk);
+  openDoc(id);
+}
+function renameDoc(id) {
+  const d = lsGet(K_DOC(id)); if (!d) return;
+  const name = prompt('Name this drawing', d.name || 'Untitled');
+  if (name == null || !name.trim()) return;
+  d.name = name.trim().slice(0, 120);
+  if (id === docId) { docName = d.name; save(); applyNameUI(); }
+  else { lsSet(K_DOC(id), d); lsSet(K_INDEX, docIndex().map(x => x.id === id ? { ...x, name: d.name } : x)); }
+  renderDocs();
+}
+const applyNameUI = () => { $('docname').textContent = docName; document.title = `${docName} – Bézier tracer`; };
+async function duplicateDoc(id) {
+  const d = lsGet(K_DOC(id)); if (!d) return;
+  newDoc(d, (d.name || 'Untitled') + ' copy', await idb.get(id));
+}
+function deleteDoc(id) {
+  const d = lsGet(K_DOC(id)); if (!d) return;
+  if (!confirm(`Delete “${d.name || 'Untitled'}”? This can’t be undone.`)) return;
+  localStorage.removeItem(K_DOC(id)); idb.del(id);
+  lsSet(K_INDEX, docIndex().filter(x => x.id !== id));
+  if (id === docId) {
+    docId = null;
+    const next = docIndex()[0];
+    if (next) openDoc(next.id); else newDoc({}, 'Untitled');
+  }
+  renderDocs();
+}
+const ago = t => {
+  const s = (Date.now() - t) / 1000;
+  if (s < 60) return 'just now'; if (s < 3600) return Math.round(s / 60) + ' min ago';
+  if (s < 86400) return Math.round(s / 3600) + ' h ago';
+  return new Date(t).toLocaleDateString();
+};
+function renderDocs() {
+  if (!$('docs-dlg').open) return;
+  $('docs-list').innerHTML = docIndex().map(d => `<li class="${d.id === docId ? 'cur' : ''}" data-id="${esc(d.id)}">
+    <button class="dn" data-act="open" title="Open">${esc(d.name || 'Untitled')}${d.id === docId ? ' (open)' : ''}</button>
+    <span class="when">${ago(d.updated)}</span>
+    <button class="sm" data-act="rename">Rename</button><button class="sm" data-act="dup">Duplicate</button><button class="sm" data-act="del">Delete</button></li>`).join('');
+}
+$('docs-list').onclick = e => {
+  const b = e.target.closest('button'), li = e.target.closest('li'); if (!b || !li) return;
+  const id = li.dataset.id, act = b.dataset.act;
+  if (act === 'open') { openDoc(id); $('docs-dlg').close(); }
+  else if (act === 'rename') renameDoc(id);
+  else if (act === 'dup') duplicateDoc(id).then(renderDocs);
+  else if (act === 'del') deleteDoc(id);
+};
+$('f-new').onclick = () => newDoc({}, 'Untitled');
+$('docs-new').onclick = () => { newDoc({}, 'Untitled'); $('docs-dlg').close(); };
+$('f-open').onclick = () => { save(); $('docs-dlg').showModal(); renderDocs(); };
+$('docs-close').onclick = () => $('docs-dlg').close();
+$('f-rename').onclick = $('docname').onclick = () => renameDoc(docId);
+$('f-dupdoc').onclick = () => duplicateDoc(docId);
+// Project files hold everything, including the sketch image, so nothing is lost moving between computers.
+$('f-saveproj').onclick = async () => {
+  commitText(); finishPath(); save();
+  const data = { app: 'bezier-tracer', version: 1, ...docData(), sketch: sketch || (await idb.get(docId)) || null };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' }));
+  download(url, exportName() + '.bztrace.json');
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+$('projfile').addEventListener('change', async e => {
+  const file = e.target.files[0]; e.target.value = '';
+  if (!file) return;
+  try {
+    const d = JSON.parse(await file.text());
+    if (d.app !== 'bezier-tracer' || !Array.isArray(d.paths)) throw new Error('not a project file');
+    const { sketch: sk, app, version, ...rest } = d;
+    newDoc(rest, d.name || file.name.replace(/\.(bztrace\.)?json$/i, ''), sk && sk.url ? sk : null);
+  } catch (err) { alert('That file couldn’t be opened as a Bézier tracer project.'); }
+});
+
 /* ---------- export ---------- */
-const exportName = () => 'tracing';
+const exportName = () => (docName || 'drawing').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'drawing';
 // Which fonts the visible text uses: family -> { chars, faces: Set('400n', '700i', …) }.
 function usedFonts() {
   const m = new Map();
@@ -2480,6 +2667,7 @@ window.addEventListener('resize', () => { applyView(); });
 /* ---------- start ---------- */
 load();
 setDoc(doc.w, doc.h);
+idb.get(docId).then(sk => { if (sk) showSketch(sk); });
 setTool('pen');
 syncView();
 if (style.layersOpen) toggleLayers(true);
