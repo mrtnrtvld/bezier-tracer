@@ -66,7 +66,8 @@ input[type=color]{width:32px;height:28px;padding:0;border:1px solid var(--line);
 .menu-pop .mlabel{font-size:12px;color:var(--muted);padding:4px 10px 0}
 .stage{position:relative;flex:1;min-height:0;overflow:hidden}
 #svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;display:block}
-body[data-tool="pen"] #svg,body[data-tool="circle"] #svg,body[data-tool="rect"] #svg{cursor:crosshair}
+body[data-tool="pen"] #svg,body[data-tool="circle"] #svg,body[data-tool="rect"] #svg,body[data-tool="polygon"] #svg,body[data-tool="star"] #svg,body[data-tool="line"] #svg{cursor:crosshair}
+#shape-opts[hidden],#shape-opts [hidden]{display:none}
 body[data-tool="pan"] #svg,body.panning #svg{cursor:grab}
 .board{fill:var(--board)}
 .trace{stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
@@ -139,6 +140,9 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
     <button id="t-pen" aria-pressed="true" title="Pen (P)">Pen</button>
     <button id="t-rect" aria-pressed="false" title="Rectangle (R)">Rectangle</button>
     <button id="t-circle" aria-pressed="false" title="Circle (C)">Circle</button>
+    <button id="t-polygon" aria-pressed="false" title="Polygon (Y)">Polygon</button>
+    <button id="t-star" aria-pressed="false" title="Star (S)">Star</button>
+    <button id="t-line" aria-pressed="false" title="Line (\)">Line</button>
     <button id="t-text" aria-pressed="false" title="Text (T)">Text</button>
     <button id="t-edit" aria-pressed="false" title="Edit (V)">Edit</button>
     <button id="t-pan" aria-pressed="false" title="Pan (H, or hold Space)">Pan</button>
@@ -216,6 +220,12 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
     <button id="titalic" aria-pressed="false" title="Italic (⌘I)" aria-label="Italic" style="font-style:italic;font-family:Georgia,serif">I</button>
     <label class="ctl">Size <input type="number" id="tsize" min="4" max="400" step="1" value="32" aria-label="Text size"></label>
   </div>
+  <div class="group" id="shape-opts">
+    <label class="ctl" id="opt-radius" title="Corner radius for rectangles">Corners <input type="number" id="radius" min="0" max="5000" step="1" value="0" aria-label="Corner radius"></label>
+    <label class="ctl" id="opt-sides" title="Number of sides for polygons">Sides <input type="number" id="sides" min="3" max="64" step="1" value="6" aria-label="Polygon sides"></label>
+    <label class="ctl" id="opt-points" title="Number of points for stars">Points <input type="number" id="points" min="3" max="64" step="1" value="5" aria-label="Star points"></label>
+    <label class="ctl" id="opt-inner" title="Inner radius of stars, as a percentage of the outer radius">Inner % <input type="number" id="inner" min="5" max="95" step="1" value="45" aria-label="Star inner radius percent"></label>
+  </div>
   <div class="group" title="Canvas size in pixels. Your drawing stays anchored to the top-left corner.">
     <label class="ctl">Canvas <input type="number" id="docw" class="dim" min="1" max="20000" step="1" aria-label="Canvas width"></label>
     <span aria-hidden="true" style="color:var(--muted)">×</span>
@@ -276,7 +286,7 @@ let texts = [];            // [{x, y, text, size, color, font, bold, italic, rot
 let selT = -1;             // index of the selected text, or -1
 let editT = null;          // text being typed: {i (-1 for new), x, y, size, color}
 let style = { color: '#2f6fd6', width: 3, fill: '#f2c94c', fillOn: false, textSize: 32, font: 'Figtree', bold: false, italic: false,
-  snap: true, grid: false, gridSnap: false, gridSize: 20 };
+  snap: true, grid: false, gridSnap: false, gridSize: 20, radius: 0, sides: 6, points: 5, inner: 45 };
 let hover = null, drag = null, spaceDown = false, hasImage = false;
 let lastTap = { t: 0, x: 0, y: 0 };
 let extra = []; // additional selected paths (Shift-click)
@@ -468,6 +478,7 @@ function syncFill() {
   if (document.activeElement !== $('tsize')) $('tsize').value = t ? t.size : style.textSize;
   const fn = t ? (t.font || 'Figtree') : style.font;
   ensureFontOption(fn); $('tfont').value = fn;
+  syncShapeOpts();
   $('tbold').setAttribute('aria-pressed', String(!!(t ? t.bold : style.bold)));
   $('titalic').setAttribute('aria-pressed', String(!!(t ? t.italic : style.italic)));
   const list = selectedPaths(), p = list.length ? paths[list[0]] : null;
@@ -479,6 +490,21 @@ function syncFill() {
   $('fill-on').checked = on;
   $('fill').value = (p && p.fill) || style.fill;
 }
+
+// The shape options show what fits the current tool or selection: corners for rectangles, sides/points for polygons/stars.
+function syncShapeOpts() {
+  const ps = selectedPaths().map(i => paths[i]);
+  const rects = ps.filter(p => p.rectAA), polys = ps.filter(p => p.regular && p.kind === 'polygon'), stars = ps.filter(p => p.regular && p.kind === 'star');
+  const showR = tool === 'rect' || rects.length, showS = tool === 'polygon' || polys.length, showP = tool === 'star' || stars.length;
+  $('opt-radius').hidden = !showR; $('opt-sides').hidden = !showS; $('opt-points').hidden = !showP; $('opt-inner').hidden = !showP;
+  $('shape-opts').hidden = !(showR || showS || showP);
+  const set = (id, v) => { if (document.activeElement !== $(id)) $(id).value = v; };
+  set('radius', rects.length ? Math.round((rects[0].rr || 0) * 100) / 100 : style.radius);
+  if (polys.length) set('sides', polys[0].nodes.length); else set('sides', style.sides);
+  if (stars.length) { set('points', stars[0].nodes.length / 2); set('inner', Math.round(dist(stars[0].nodes[1], polyCenter(stars[0])) / dist(stars[0].nodes[0], polyCenter(stars[0])) * 100)); }
+  else { set('points', style.points); set('inner', style.inner); }
+}
+const polyCenter = p => { const pts = p.nodes.filter((_, j) => j % 2 === 0); return { x: pts.reduce((s, q) => s + q.x, 0) / pts.length, y: pts.reduce((s, q) => s + q.y, 0) / pts.length }; };
 
 /* ---------- geometry ---------- */
 function seg(a, b) {
@@ -528,6 +554,7 @@ function nearestOnPaths(pt, maxD) {
 }
 // Split the segment with de Casteljau so the curve keeps its exact shape.
 function insertPoint(h) {
+  touched(paths[h.p]);
   const n = paths[h.p].nodes, a = n[h.i], b = n[(h.i + 1) % n.length], t = h.t;
   let node;
   if (!a.ho && !b.hi) {
@@ -761,7 +788,10 @@ function render() {
 const hints = {
   pen: 'Click to place a corner point; click and drag to pull out curve handles. Click the first point to close the shape. <kbd>Enter</kbd> or <kbd>Esc</kbd> finishes the path. Click on an existing path to add a point to it, or click an open path’s end to keep drawing it.',
   edit: 'Drag a shape or text to move it. Drag on empty space to select everything the box touches (<kbd>Shift</kbd> adds), or press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>A</kbd> for everything; drag a corner of the selection box to scale, or the round handle above it to rotate (<kbd>Shift</kbd> snaps to 15°). <kbd>⌘</kbd>+<kbd>D</kbd> duplicates and <kbd>Alt</kbd>-drag drags a copy; <kbd>⌘</kbd>+<kbd>G</kbd> groups the selection; the Object menu also combines shapes so inner ones cut holes. Drag points or handles to reshape. <kbd>]</kbd> / <kbd>[</kbd> bring forward / send backward (add <kbd>Shift</kbd> for front / back); <kbd>L</kbd> shows layers. <kbd>Alt</kbd>-drag a handle to turn a smooth point into a corner. Double-click a point to toggle smooth/corner, or double-click a path to add a point. <kbd>Delete</kbd> removes the selected point, or the whole path if only the path is selected. Arrow keys nudge the selection 1 px, <kbd>Shift</kbd>+arrows 10 px. <kbd>Shift</kbd>-click to add or remove items. When scaling, <kbd>Shift</kbd> stretches freely and <kbd>Alt</kbd> scales from the center.',
-  rect: 'Drag from corner to corner to draw a rectangle. Hold <kbd>Shift</kbd> for a square, <kbd>Alt</kbd> to draw from the center. It’s a regular path, so you can reshape it in Edit mode.',
+  rect: 'Drag from corner to corner to draw a rectangle. Hold <kbd>Shift</kbd> for a square, <kbd>Alt</kbd> to draw from the center. Round its corners with Corners in the style bar. It’s a regular path, so you can reshape it in Edit mode.',
+  polygon: 'Drag from the center outward to draw a polygon; the first corner follows the pointer. <kbd>Shift</kbd> snaps the angle. Set the number of sides in the style bar.',
+  star: 'Drag from the center outward to draw a star; the first point follows the pointer. <kbd>Shift</kbd> snaps the angle. Set the points and inner radius in the style bar.',
+  line: 'Drag to draw a straight line. <kbd>Shift</kbd> locks it to 45° steps.',
   circle: 'Drag from the center outward to draw a circle. It’s a regular Bézier path, so you can reshape it in Edit mode.',
   text: 'Click to add text, or click existing text to change it. <kbd>Enter</kbd> places it, <kbd>Shift</kbd>+<kbd>Enter</kbd> starts a new line, <kbd>Esc</kbd> cancels. <kbd>⌘</kbd>+<kbd>B</kbd> / <kbd>⌘</kbd>+<kbd>I</kbd> for bold / italic. The color comes from Fill and the size from Size. In Edit mode, drag text to move it and double-click to retype it.',
   pan: 'Drag to move around. Scroll to zoom. Hold <kbd>Space</kbd> in any tool to pan.'
@@ -770,7 +800,7 @@ function setTool(t) {
   commitText();
   finishPath();
   tool = t; document.body.dataset.tool = t;
-  for (const n of ['pen', 'rect', 'circle', 'text', 'edit', 'pan']) $('t-' + n).setAttribute('aria-pressed', String(n === t));
+  for (const n of ['pen', 'rect', 'circle', 'polygon', 'star', 'line', 'text', 'edit', 'pan']) $('t-' + n).setAttribute('aria-pressed', String(n === t));
   $('hint').innerHTML = hints[t];
   render();
 }
@@ -806,6 +836,7 @@ function deleteSelected() {
   if (!ts.length && !p) return;
   snap();
   if (p && sel.n >= 0) {
+    touched(p);
     p.nodes.splice(sel.n, 1);
     if (p.nodes.length < 2 && cur !== sel.p) removePath(sel.p);
     else if (p.nodes.length < 3) p.closed = false;
@@ -816,6 +847,7 @@ function deleteSelected() {
   normStructure(); render(); save();
 }
 function toggleCorner(p, i) {
+  touched(p);
   const n = p.nodes[i];
   const tiny = h => !h || dist(h, n) < 1;
   if (!tiny(n.hi) || !tiny(n.ho)) { n.hi = n.ho = null; n.corner = false; return; }
@@ -845,6 +877,7 @@ function penDown(pt, e) {
     if (end) {
       snap();
       const p = paths[end.p];
+      touched(p);
       if (end.end === 'first') reversePath(p);
       cur = end.p; sel = { p: cur, n: p.nodes.length - 1 };
       render(); return;
@@ -1191,20 +1224,78 @@ function circleDown(pt, e) {
 }
 
 /* ---------- rectangles ---------- */
+// Rectangles remember their corner radius (rr) while they stay upright and unedited (rectAA).
 function setRect(p, a, b) {
-  const c = (x, y) => ({ x, y, hi: null, ho: null });
-  p.nodes = [c(a.x, a.y), c(b.x, a.y), c(b.x, b.y), c(a.x, b.y)];
+  const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+  const r = Math.max(0, Math.min(p.rr || 0, (x1 - x0) / 2, (y1 - y0) / 2)), K = KAPPA * r;
+  const c = (x, y, hi, ho) => ({ x, y, hi: hi || null, ho: ho || null });
+  p.nodes = !(r > 0) ? [c(x0, y0), c(x1, y0), c(x1, y1), c(x0, y1)] : [
+    c(x0 + r, y0, { x: x0 + r - K, y: y0 }), c(x1 - r, y0, null, { x: x1 - r + K, y: y0 }),
+    c(x1, y0 + r, { x: x1, y: y0 + r - K }), c(x1, y1 - r, null, { x: x1, y: y1 - r + K }),
+    c(x1 - r, y1, { x: x1 - r + K, y: y1 }), c(x0 + r, y1, null, { x: x0 + r - K, y: y1 }),
+    c(x0, y1 - r, { x: x0, y: y1 - r + K }), c(x0, y0 + r, null, { x: x0, y: y0 + r - K })
+  ];
   p.closed = true;
 }
+// Regular polygons and stars: n corners around c, the first at angle `ang`. Stars alternate with inner points.
+function setPoly(p, c, r, ang, n, inner) {
+  const count = inner ? n * 2 : n, nodes = [];
+  for (let j = 0; j < count; j++) {
+    const rr = inner && j % 2 ? r * inner : r, a = ang + j * 2 * Math.PI / count;
+    nodes.push({ x: c.x + rr * Math.cos(a), y: c.y + rr * Math.sin(a), hi: null, ho: null });
+  }
+  p.nodes = nodes; p.closed = true;
+}
+// Hand-editing points turns a rectangle/polygon/star into a free shape: its size controls stop applying.
+function touched(p) { if (p) { delete p.rectAA; delete p.regular; } }
 function rectDown(pt, e) {
   const T = snapTargets(); pt = snapPoint(pt, T, e).pt;
   snap();
-  const p = { nodes: [], closed: true, fill: newFill(), ...newStroke(), z: nextZ(), kind: 'rect' };
+  const p = { nodes: [], closed: true, fill: newFill(), ...newStroke(), z: nextZ(), kind: 'rect', rectAA: true, rr: style.radius || 0 };
   setRect(p, pt, pt);
   paths.push(p);
   sel = { p: paths.length - 1, n: -1 };
   drag = { type: 'rect', p: paths.length - 1, a: pt, T };
   render();
+}
+
+/* ---------- polygons, stars and lines ---------- */
+function shapeDown(pt, e, kind) {
+  const T = snapTargets(); pt = snapPoint(pt, T, e).pt;
+  snap();
+  const p = { nodes: [], closed: kind !== 'line', fill: kind === 'line' ? null : newFill(), ...newStroke(), z: nextZ(), kind };
+  if (kind !== 'line') p.regular = true;
+  paths.push(p);
+  sel = { p: paths.length - 1, n: -1 };
+  drag = { type: 'shape', kind, p: paths.length - 1, a: pt, T };
+  shapeMove(pt, e);
+}
+function shapeMove(pt, e) {
+  const d = drag, p = paths[d.p];
+  if (d.kind === 'line') {
+    let b = pt;
+    if (e.shiftKey) {   // lock to 45° steps
+      const L = dist(pt, d.a), a = Math.round(Math.atan2(pt.y - d.a.y, pt.x - d.a.x) / (Math.PI / 4)) * Math.PI / 4;
+      b = { x: d.a.x + L * Math.cos(a), y: d.a.y + L * Math.sin(a) };
+    }
+    p.nodes = [{ x: d.a.x, y: d.a.y, hi: null, ho: null }, { x: b.x, y: b.y, hi: null, ho: null }];
+    d.size = dist(b, d.a); return;
+  }
+  let ang = Math.atan2(pt.y - d.a.y, pt.x - d.a.x);
+  if (dist(pt, d.a) < 1e-6) ang = -Math.PI / 2;
+  if (e.shiftKey) ang = Math.round(ang / (Math.PI / 12)) * Math.PI / 12;
+  d.size = dist(pt, d.a);
+  if (d.kind === 'star') setPoly(p, d.a, d.size, ang, clampInt(style.points, 3, 64, 5), clampInt(style.inner, 5, 95, 45) / 100);
+  else setPoly(p, d.a, d.size, ang, clampInt(style.sides, 3, 64, 6));
+}
+const clampInt = (v, lo, hi, dflt) => { v = Math.round(+v); return v >= lo && v <= hi ? v : dflt; };
+// Rebuild a regular polygon/star from its current points (center, radius and angle survive moves and rotation).
+function regenPoly(p) {
+  const pts = p.kind === 'star' ? p.nodes.filter((_, j) => j % 2 === 0) : p.nodes;
+  const c = { x: pts.reduce((s, q) => s + q.x, 0) / pts.length, y: pts.reduce((s, q) => s + q.y, 0) / pts.length };
+  const r = dist(pts[0], c), ang = Math.atan2(pts[0].y - c.y, pts[0].x - c.x);
+  if (p.kind === 'star') setPoly(p, c, r, ang, clampInt(style.points, 3, 64, 5), clampInt(style.inner, 5, 95, 45) / 100);
+  else setPoly(p, c, r, ang, clampInt(style.sides, 3, 64, 6));
 }
 
 svg.addEventListener('pointerdown', e => {
@@ -1235,13 +1326,14 @@ svg.addEventListener('pointerdown', e => {
   if (tool === 'pen') { extra = []; selT = -1; extraT = []; penDown(pt, e); }
   else if (tool === 'circle') { extra = []; selT = -1; extraT = []; circleDown(pt, e); }
   else if (tool === 'rect') { extra = []; selT = -1; extraT = []; rectDown(pt, e); }
+  else if (tool === 'polygon' || tool === 'star' || tool === 'line') { extra = []; selT = -1; extraT = []; shapeDown(pt, e, tool); }
   else editDown(pt, e);
 });
 
 svg.addEventListener('pointermove', e => {
   let pt = toDoc(e); hover = pt;
   if (!drag) { if (tool === 'pen') render(); return; }
-  if (drag.pre && !drag.moved) { pushUndo(drag.pre); drag.moved = true; }
+  if (drag.pre && !drag.moved) { pushUndo(drag.pre); drag.moved = true; if (drag.type === 'anchor' || drag.type === 'handle') touched(paths[sel.p]); }
   const n = drag.node;
   switch (drag.type) {
     case 'scale': {
@@ -1258,6 +1350,7 @@ svg.addEventListener('pointermove', e => {
       sx = Math.max(0.01, sx); sy = Math.max(0.01, sy);
       const tf = q => q && { x: a.x + (q.x - a.x) * sx, y: a.y + (q.y - a.y) * sy };
       drag.list.forEach((pi, k) => {
+        if (Math.abs(sx - sy) > 1e-9) delete paths[pi].regular;
         paths[pi].nodes = drag.orig[k].map(n => ({ ...n, x: a.x + (n.x - a.x) * sx, y: a.y + (n.y - a.y) * sy, hi: tf(n.hi), ho: tf(n.ho) }));
       });
       // Text moves with the box and its font size scales too (by the average when stretched).
@@ -1274,7 +1367,7 @@ svg.addEventListener('pointermove', e => {
       if (e.shiftKey) deg = Math.round(deg / 15) * 15;
       drag.deg = deg;
       const rp = rotator(drag.c, deg);
-      drag.list.forEach((pi, j) => { paths[pi].nodes = drag.orig[j].map(n => ({ ...n, ...rp(n), hi: rp(n.hi), ho: rp(n.ho) })); });
+      drag.list.forEach((pi, j) => { paths[pi].nodes = drag.orig[j].map(n => ({ ...n, ...rp(n), hi: rp(n.hi), ho: rp(n.ho) })); if (deg % 90) delete paths[pi].rectAA; });
       drag.tlist.forEach((ti, j) => { const o = drag.torig[j]; Object.assign(texts[ti], rp(o), { rot: normDeg(o.rot + deg) }); });
       render(); break;
     }
@@ -1301,6 +1394,9 @@ svg.addEventListener('pointermove', e => {
       drag.w = Math.abs(b.x - a.x); drag.h = Math.abs(b.y - a.y);
       setRect(paths[drag.p], a, b); render(); break;
     }
+    case 'shape':
+      { const sp = snapPoint(pt, drag.T, e); pt = sp.pt; drag.guides = sp.guides; }
+      shapeMove(pt, e); render(); break;
     case 'circle':
       { const sp = snapPoint(pt, drag.T, e); pt = sp.pt; drag.guides = sp.guides; }
       drag.r = dist(pt, drag.c); setCircle(paths[drag.p], drag.c, drag.r); render(); break;
@@ -1336,6 +1432,7 @@ function endDrag() {
   // A pen click that wobbled a few pixels shouldn't leave invisible stub handles behind.
   if (d.type === 'circle' && !(d.r > 2 / view.k)) { removePath(d.p); undoStack.pop(); }
   if (d.type === 'rect' && !(d.w > 2 / view.k && d.h > 2 / view.k)) { removePath(d.p); undoStack.pop(); }
+  if (d.type === 'shape' && !(d.size > 2 / view.k)) { removePath(d.p); undoStack.pop(); }
   if (d.dup && !d.moved) { restore(d.pre); return; } // Alt-click without dragging: drop the copy
   if (d.type === 'newnode' && d.node.ho && dist(d.node.ho, d.node) < 4 / view.k) { d.node.hi = d.node.ho = null; }
   if (wasEdit) save(); render();
@@ -1405,6 +1502,9 @@ window.addEventListener('keydown', e => {
     case 'p': case 'P': setTool('pen'); break;
     case 'c': case 'C': setTool('circle'); break;
     case 'r': case 'R': setTool('rect'); break;
+    case 'y': case 'Y': setTool('polygon'); break;
+    case 's': case 'S': setTool('star'); break;
+    case '\\': setTool('line'); break;
     case 't': case 'T': setTool('text'); break;
     case 'v': case 'V': if (e.shiftKey) flipSel('v'); else setTool('edit'); break;
     case 'h': case 'H': if (e.shiftKey) flipSel('h'); else setTool('pan'); break;
@@ -1702,6 +1802,7 @@ function selCenter() {
 }
 function rotateSel(deg) {
   const c = selCenter(); if (!c) return;
+  if (deg % 90) selectedPaths().forEach(i => delete paths[i].rectAA);
   const rp = rotator(c, deg);
   transformSel(rp, t => { Object.assign(t, rp(t)); t.rot = normDeg((t.rot || 0) + deg); });
 }
@@ -1843,6 +1944,9 @@ $('t-edit').onclick = () => setTool('edit');
 $('t-pan').onclick = () => setTool('pan');
 $('t-circle').onclick = () => setTool('circle');
 $('t-rect').onclick = () => setTool('rect');
+$('t-polygon').onclick = () => setTool('polygon');
+$('t-star').onclick = () => setTool('star');
+$('t-line').onclick = () => setTool('line');
 $('t-text').onclick = () => setTool('text');
 $('flip-h').onclick = () => flipAll('h');
 $('flip-v').onclick = () => flipAll('v');
@@ -1917,6 +2021,23 @@ function toggleTextStyle(key) {
   render(); save();
 }
 $('tbold').onclick = () => toggleTextStyle('bold');
+// Shape options set the default for new shapes and reshape selected ones that are still regular.
+let optUndoOpen = false;
+function applyShapeOpt(key, v) {
+  style[key] = v;
+  const ps = selectedPaths().map(i => paths[i]).filter(p => key === 'radius' ? p.rectAA : p.regular && p.kind === (key === 'sides' ? 'polygon' : 'star'));
+  if (ps.length && !optUndoOpen) { snap(); optUndoOpen = true; }
+  ps.forEach(p => {
+    if (key === 'radius') { const i = paths.indexOf(p), b = boundsOf([i]); p.rr = v; setRect(p, { x: b.x0, y: b.y0 }, { x: b.x1, y: b.y1 }); }
+    else regenPoly(p);
+  });
+  render(); save();
+}
+$('radius').oninput = e => { const v = +e.target.value; if (v >= 0) applyShapeOpt('radius', v); };
+$('sides').oninput = e => { const v = clampInt(e.target.value, 3, 64, 0); if (v) applyShapeOpt('sides', v); };
+$('points').oninput = e => { const v = clampInt(e.target.value, 3, 64, 0); if (v) applyShapeOpt('points', v); };
+$('inner').oninput = e => { const v = clampInt(e.target.value, 5, 95, 0); if (v) applyShapeOpt('inner', v); };
+for (const id of ['radius', 'sides', 'points', 'inner']) $(id).onchange = () => { optUndoOpen = false; };
 $('titalic').onclick = () => toggleTextStyle('italic');
 $('tfont').onchange = e => {
   const v = e.target.value;
@@ -1979,7 +2100,8 @@ const EYE_OFF = '<svg viewBox="0 0 16 16"><path d="M2 2l12 12M6.6 3.7A6.7 6.7 0 
 const FOLDER = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M1.5 4.5v8h13v-7H7.5l-1.5-1.5h-4.5z"/></svg>';
 function layerName(it) {
   if (it.k === 't') return `“${it.ref.text.split('\n')[0]}${it.ref.text.includes('\n') ? ' …' : ''}”`;
-  const p = it.ref, base = p.kind === 'circle' ? 'Circle' : p.kind === 'rect' ? 'Rectangle' : p.closed ? 'Shape' : 'Path';
+  const p = it.ref, names = { circle: 'Circle', rect: 'Rectangle', polygon: 'Polygon', star: 'Star', line: 'Line' };
+  const base = names[p.kind] || (p.closed ? 'Shape' : 'Path');
   return `${base} ${it.i + 1}`;
 }
 const refIndex = r => { const i = paths.indexOf(r); return i >= 0 ? { k: 'p', i } : { k: 't', i: texts.indexOf(r) }; };
