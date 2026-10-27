@@ -153,6 +153,11 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
       <button class="mi" id="clear-sketch" title="Remove the sketch image (your paths stay)" disabled>Remove sketch</button>
     </div></details>
     <details class="menu" id="m-object"><summary>Object</summary><div class="menu-pop" id="object-pop">
+      <button class="mi" id="o-copy">Copy <span class="sc">⌘C</span></button>
+      <button class="mi" id="o-cut">Cut <span class="sc">⌘X</span></button>
+      <button class="mi" id="o-paste">Paste <span class="sc">⌘V</span></button>
+      <button class="mi" id="o-dup">Duplicate <span class="sc">⌘D</span></button>
+      <hr>
       <button class="mi" id="o-group">Group <span class="sc">⌘G</span></button>
       <button class="mi" id="o-ungroup">Ungroup <span class="sc">⇧⌘G</span></button>
       <hr>
@@ -701,7 +706,7 @@ function render() {
 /* ---------- tools ---------- */
 const hints = {
   pen: 'Click to place a corner point; click and drag to pull out curve handles. Click the first point to close the shape. <kbd>Enter</kbd> or <kbd>Esc</kbd> finishes the path. Click on an existing path to add a point to it, or click an open path’s end to keep drawing it.',
-  edit: 'Drag a shape or text to move it. Drag on empty space to select everything the box touches (<kbd>Shift</kbd> adds), or press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>A</kbd> for everything; drag a corner of the selection box to scale. <kbd>⌘</kbd>+<kbd>G</kbd> groups the selection; the Object menu also combines shapes so inner ones cut holes. Drag points or handles to reshape. <kbd>]</kbd> / <kbd>[</kbd> bring forward / send backward (add <kbd>Shift</kbd> for front / back); <kbd>L</kbd> shows layers. <kbd>Alt</kbd>-drag a handle to turn a smooth point into a corner. Double-click a point to toggle smooth/corner, or double-click a path to add a point. <kbd>Delete</kbd> removes the selected point, or the whole path if only the path is selected. Arrow keys nudge the selection 1 px, <kbd>Shift</kbd>+arrows 10 px. <kbd>Shift</kbd>-click to add or remove items. When scaling, <kbd>Shift</kbd> stretches freely and <kbd>Alt</kbd> scales from the center.',
+  edit: 'Drag a shape or text to move it. Drag on empty space to select everything the box touches (<kbd>Shift</kbd> adds), or press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>A</kbd> for everything; drag a corner of the selection box to scale. <kbd>⌘</kbd>+<kbd>D</kbd> duplicates and <kbd>Alt</kbd>-drag drags a copy; <kbd>⌘</kbd>+<kbd>G</kbd> groups the selection; the Object menu also combines shapes so inner ones cut holes. Drag points or handles to reshape. <kbd>]</kbd> / <kbd>[</kbd> bring forward / send backward (add <kbd>Shift</kbd> for front / back); <kbd>L</kbd> shows layers. <kbd>Alt</kbd>-drag a handle to turn a smooth point into a corner. Double-click a point to toggle smooth/corner, or double-click a path to add a point. <kbd>Delete</kbd> removes the selected point, or the whole path if only the path is selected. Arrow keys nudge the selection 1 px, <kbd>Shift</kbd>+arrows 10 px. <kbd>Shift</kbd>-click to add or remove items. When scaling, <kbd>Shift</kbd> stretches freely and <kbd>Alt</kbd> scales from the center.',
   rect: 'Drag from corner to corner to draw a rectangle. Hold <kbd>Shift</kbd> for a square, <kbd>Alt</kbd> to draw from the center. It’s a regular path, so you can reshape it in Edit mode.',
   circle: 'Drag from the center outward to draw a circle. It’s a regular Bézier path, so you can reshape it in Edit mode.',
   text: 'Click to add text, or click existing text to change it. <kbd>Enter</kbd> places it, <kbd>Esc</kbd> cancels. The color comes from Fill and the size from Size. In Edit mode, drag text to move it and double-click to retype it.',
@@ -949,7 +954,7 @@ function editDown(pt, e) {
     // Pressing on text that's already selected drags the whole selection along with it.
     if (!selectedTexts().includes(ti)) setSelection(ups, uts);
     sel.n = -1;
-    drag = { type: 'move', list: selectedPaths(), tlist: selectedTexts(), last: pt, pre: state() }; render(); return;
+    startMove(pt, e); return;
   }
   // Pressing on a path that's already part of a multi-selection drags the whole group.
   const hp = (e.target.dataset && e.target.dataset.p !== undefined) ? +e.target.dataset.p : -1;
@@ -978,8 +983,7 @@ function editDown(pt, e) {
     const [ups, uts] = expandSel([hp], []);
     if (e.shiftKey) { toggleUnit(ups, uts); render(); return; }
     if (!keepGroup) setSelection(ups, uts);
-    drag = { type: 'move', list: selectedPaths(), tlist: selectedTexts(), last: pt, pre: state() };
-    render(); return;
+    startMove(pt, e); return;
   }
   // Empty space: start a selection box. Shift keeps what's already selected.
   if (!e.shiftKey) setSelection([], []);
@@ -991,6 +995,13 @@ function editDown(pt, e) {
   });
   const tboxes = texts.map((t, i) => t.hidden ? null : textBox(i));
   drag = { type: 'marquee', a: pt, b: pt, samples, tboxes, baseP: selectedPaths(), baseT: selectedTexts() };
+  render();
+}
+// Start dragging the selection. With Alt held, drag a copy and leave the original in place (one undo step).
+function startMove(pt, e) {
+  const pre = state();
+  if (e.altKey) pasteData(copyData(), 0, 0, true);
+  drag = { type: 'move', list: selectedPaths(), tlist: selectedTexts(), last: pt, pre, dup: e.altKey };
   render();
 }
 // Select every path with part of its outline inside the box, and every text the box touches.
@@ -1155,6 +1166,7 @@ function endDrag() {
   // A pen click that wobbled a few pixels shouldn't leave invisible stub handles behind.
   if (d.type === 'circle' && !(d.r > 2 / view.k)) { removePath(d.p); undoStack.pop(); }
   if (d.type === 'rect' && !(d.w > 2 / view.k && d.h > 2 / view.k)) { removePath(d.p); undoStack.pop(); }
+  if (d.dup && !d.moved) { restore(d.pre); return; } // Alt-click without dragging: drop the copy
   if (d.type === 'newnode' && d.node.ho && dist(d.node.ho, d.node) < 4 / view.k) { d.node.hi = d.node.ho = null; }
   if (wasEdit) save(); render();
 }
@@ -1189,6 +1201,7 @@ window.addEventListener('keydown', e => {
   if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
   if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); finishPath(); selectAll(); return; }
+  if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSel(); return; }
   if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); return; }
   if (mod) return;
   if (e.code === 'Space' && !spaceDown) { spaceDown = true; document.body.classList.add('panning'); e.preventDefault(); return; }
@@ -1488,6 +1501,70 @@ async function importSVG(file) {
   }
 }
 
+/* ---------- clipboard ---------- */
+// Copies go to the system clipboard (tagged JSON), so they also paste into another tab of the app.
+const CLIP_TAG = 'bezier-tracer-clip:';
+let clip = null, pasteN = 0;
+const typing = el => el && el.matches && el.matches('input, textarea, select, [contenteditable]');
+function copyData() {
+  const [ps, ts] = expandSel(selectedPaths(), selectedTexts());
+  if (!ps.length && !ts.length) return null;
+  return JSON.parse(JSON.stringify({ paths: ps.map(i => paths[i]), texts: ts.map(i => texts[i]) }));
+}
+// Add copies of the items, shifted by dx/dy, on top of everything. Groups and combined shapes get new ids.
+function pasteData(data, dx, dy, noSnap) {
+  if (!data || (!data.paths.length && !data.texts.length)) return;
+  commitText(); finishPath();
+  if (!noSnap) snap();
+  let z = nextZ(), id = newId();
+  const ids = new Map(), remap = key => { if (!ids.has(key)) ids.set(key, id++); return ids.get(key); };
+  const mv = q => q && { ...q, x: q.x + dx, y: q.y + dy };
+  const items = [...data.paths.map(r => ({ r, p: true })), ...data.texts.map(r => ({ r }))].sort((a, b) => a.r.z - b.r.z);
+  const ps = [], ts = [];
+  items.forEach(({ r, p }) => {
+    r = JSON.parse(JSON.stringify(r));
+    if (r.g != null) r.g = remap('g' + r.g);
+    if (r.cp != null) r.cp = remap('c' + r.cp);
+    r.z = z++;
+    if (p) { r.nodes = r.nodes.map(n => ({ ...mv(n), hi: mv(n.hi), ho: mv(n.ho) })); paths.push(r); ps.push(paths.length - 1); }
+    else { r.x += dx; r.y += dy; texts.push(r); ts.push(texts.length - 1); }
+  });
+  normStructure();
+  if (tool !== 'edit') setTool('edit');
+  setSelection(ps, ts); render(); save();
+}
+function copySel(e) {
+  const d = copyData(); if (!d) return false;
+  clip = d; pasteN = 0;
+  const txt = CLIP_TAG + JSON.stringify(d);
+  if (e && e.clipboardData) e.clipboardData.setData('text/plain', txt);
+  else if (navigator.clipboard) navigator.clipboard.writeText(txt).catch(() => {});
+  return true;
+}
+function pasteClip(data) { pasteN++; pasteData(data, 12 * pasteN, 12 * pasteN); }
+function duplicateSel() { const d = copyData(); if (d) pasteData(d, 12, 12); }
+// Plain text from elsewhere becomes a text item in the middle of the view.
+function pastePlainText(str) {
+  const r = svg.getBoundingClientRect(), c = toDoc({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 });
+  snap();
+  texts.push({ x: c.x, y: c.y, text: str.split('\n')[0].slice(0, 500), size: style.textSize, color: style.fill, font: style.font, z: nextZ() });
+  if (tool !== 'edit') setTool('edit');
+  setSelection([], [texts.length - 1]); render(); save();
+}
+document.addEventListener('copy', e => { if (typing(e.target) || editT) return; if (copySel(e)) e.preventDefault(); });
+document.addEventListener('cut', e => { if (typing(e.target) || editT) return; if (copySel(e)) { e.preventDefault(); deleteSelected(); } });
+document.addEventListener('paste', e => {
+  if (typing(e.target) || editT) return;
+  const cd = e.clipboardData, txt = cd ? cd.getData('text/plain') : '';
+  const file = cd && [...cd.files].find(f => f.type.startsWith('image/'));
+  e.preventDefault();
+  if (txt.startsWith(CLIP_TAG)) { try { pasteClip(JSON.parse(txt.slice(CLIP_TAG.length))); } catch (err) {} return; }
+  if (/^\s*(<\?xml[^>]*>\s*)?<svg[\s>]/i.test(txt)) { importSVG(new File([txt], 'pasted.svg', { type: 'image/svg+xml' })); return; }
+  if (file) { if (isSVGFile(file)) importSVG(file); else loadImage(file); return; }
+  if (txt.trim()) { pastePlainText(txt.trim()); return; }
+  if (clip) pasteClip(clip);
+});
+
 /* ---------- controls ---------- */
 // Menus close when you click outside them, pick an item, choose a file, or press Escape.
 const menus = [...document.querySelectorAll('details.menu')];
@@ -1744,6 +1821,11 @@ list.addEventListener('drop', e => {
   normStructure(); render(); save();
 });
 $('layers-btn').onclick = () => toggleLayers();
+$('o-copy').onclick = () => copySel();
+$('o-cut').onclick = () => { if (copySel()) deleteSelected(); };
+// The menu can't read the system clipboard without a permission prompt, so it pastes the last copy from this tab.
+$('o-paste').onclick = () => { if (clip) pasteClip(clip); };
+$('o-dup').onclick = duplicateSel;
 $('o-group').onclick = groupSel;
 $('o-ungroup').onclick = ungroupSel;
 $('o-combine').onclick = combineSel;
