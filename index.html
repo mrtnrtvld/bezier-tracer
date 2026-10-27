@@ -46,6 +46,24 @@ input[type=number]{width:56px;font:inherit;color:var(--ink);background:var(--btn
 input.dim{width:68px}
 input[type=color]{width:32px;height:28px;padding:0;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer}
 .spacer{flex:1}
+.bar.props{gap:8px 22px;padding:6px 12px}
+.menu{position:relative}
+.menu>summary{list-style:none;font:inherit;color:var(--ink);background:var(--btn);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer;line-height:1.3;user-select:none}
+.menu>summary::-webkit-details-marker{display:none}
+.menu>summary::after{content:" ▾";color:var(--muted)}
+.menu>summary:hover{border-color:var(--muted)}
+.menu[open]>summary{background:var(--btn-on);color:var(--btn-on-ink);border-color:var(--btn-on)}
+.menu-pop{position:absolute;top:calc(100% + 4px);left:0;z-index:20;min-width:230px;display:flex;flex-direction:column;padding:4px;
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.16)}
+.menu-pop .mi{display:flex;justify-content:space-between;gap:16px;width:100%;border:none;background:none;text-align:left;padding:6px 10px;border-radius:6px;cursor:pointer;color:var(--ink);white-space:nowrap}
+.menu-pop .mi:hover:not(:disabled),.menu-pop .mi:focus-visible{background:var(--btn)}
+.menu-pop .sc{color:var(--muted);font-size:12px}
+.menu-pop hr{border:none;border-top:1px solid var(--line);margin:4px 2px}
+.menu-pop .mrow{display:flex;gap:4px;padding:4px 6px;flex-wrap:wrap}
+.menu-pop .mrow button{padding:4px 8px}
+.menu-pop .mi[aria-pressed="true"]::after{content:"✓";color:var(--accent)}
+.menu-pop label.mi.ctl{cursor:default;align-items:center}
+.menu-pop .mlabel{font-size:12px;color:var(--muted);padding:4px 10px 0}
 .stage{position:relative;flex:1;min-height:0;overflow:hidden}
 #svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;display:block}
 body[data-tool="pen"] #svg,body[data-tool="circle"] #svg,body[data-tool="rect"] #svg{cursor:crosshair}
@@ -110,7 +128,7 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
 <body data-tool="pen">
 
 <div class="bar">
-  <div class="group" role="group" aria-label="Tools">
+  <div class="group" role="group" aria-label="Tools" id="tools">
     <button id="t-pen" aria-pressed="true" title="Pen (P)">Pen</button>
     <button id="t-rect" aria-pressed="false" title="Rectangle (R)">Rectangle</button>
     <button id="t-circle" aria-pressed="false" title="Circle (C)">Circle</button>
@@ -119,13 +137,35 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
     <button id="t-pan" aria-pressed="false" title="Pan (H, or hold Space)">Pan</button>
   </div>
   <div class="group">
-    <label class="filebtn" title="Bring in the shapes and text from an SVG file as editable paths">Import SVG<input type="file" id="svgfile" accept=".svg,image/svg+xml"></label>
-    <label class="filebtn">Load sketch<input type="file" id="file" accept="image/*"></label>
-    <label class="ctl">Sketch <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.5" aria-label="Sketch opacity"></label>
-    <button id="flip-h" aria-pressed="false" title="Flip sketch and drawing horizontally">Flip ↔</button>
-    <button id="flip-v" aria-pressed="false" title="Flip sketch and drawing vertically">Flip ↕</button>
-    <button id="clear-sketch" title="Remove the sketch image (your paths stay)" disabled>Remove sketch</button>
+    <details class="menu" id="m-file"><summary>File</summary><div class="menu-pop" id="file-pop">
+      <label class="filebtn mi" title="Bring in the shapes and text from an SVG file as editable paths">Import SVG…<input type="file" id="svgfile" accept=".svg,image/svg+xml"></label>
+    </div></details>
+    <details class="menu" id="m-sketch"><summary>Sketch</summary><div class="menu-pop">
+      <label class="filebtn mi">Load sketch…<input type="file" id="file" accept="image/*"></label>
+      <label class="mi ctl">Opacity <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.5" aria-label="Sketch opacity"></label>
+      <hr>
+      <button class="mi" id="flip-h" aria-pressed="false" title="Flip sketch and drawing horizontally">Flip all horizontally</button>
+      <button class="mi" id="flip-v" aria-pressed="false" title="Flip sketch and drawing vertically">Flip all vertically</button>
+      <hr>
+      <button class="mi" id="clear-sketch" title="Remove the sketch image (your paths stay)" disabled>Remove sketch</button>
+    </div></details>
   </div>
+  <div class="group">
+    <button id="zoomout" title="Zoom out">−</button>
+    <button id="fit" title="Fit to window (0)">Fit</button>
+    <button id="zoomin" title="Zoom in">+</button>
+  </div>
+  <div class="spacer"></div>
+  <div class="group">
+    <button id="layers-btn" aria-pressed="false" aria-controls="layers" title="Show the layers panel (L)">Layers</button>
+    <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
+    <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
+    <button id="del" title="Delete selected (Delete)">Delete</button>
+    <button id="clear" title="Remove all paths">Clear</button>
+    <button id="export" class="primary">Export</button>
+  </div>
+</div>
+<div class="bar props" aria-label="Style">
   <div class="group">
     <label class="ctl">Stroke <input type="color" id="color" value="#2f6fd6" aria-label="Stroke color"></label>
     <input type="number" id="width" min="0" max="40" step="0.5" value="3" aria-label="Stroke width" title="Stroke width (0 for no outline)">
@@ -142,20 +182,6 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
     <label class="ctl">Canvas <input type="number" id="docw" class="dim" min="1" max="20000" step="1" aria-label="Canvas width"></label>
     <span aria-hidden="true" style="color:var(--muted)">×</span>
     <input type="number" id="doch" class="dim" min="1" max="20000" step="1" aria-label="Canvas height">
-  </div>
-  <div class="group">
-    <button id="zoomout" title="Zoom out">−</button>
-    <button id="fit" title="Fit to window (0)">Fit</button>
-    <button id="zoomin" title="Zoom in">+</button>
-  </div>
-  <div class="spacer"></div>
-  <div class="group">
-    <button id="layers-btn" aria-pressed="false" aria-controls="layers" title="Show the layers panel (L)">Layers</button>
-    <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
-    <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
-    <button id="del" title="Delete selected (Delete)">Delete</button>
-    <button id="clear" title="Remove all paths">Clear</button>
-    <button id="export" class="primary">Export SVG</button>
   </div>
 </div>
 
@@ -179,7 +205,7 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
       <button id="z-back" title="Send to back (Shift+[)" aria-label="Send to back">⤓</button>
     </div>
   </aside>
-  <div class="empty" id="empty"><p>Drop a sketch image here, or use Load sketch. You can also start drawing on the blank board.</p></div>
+  <div class="empty" id="empty"><p>Drop a sketch image or an SVG here, or use the Sketch and File menus. You can also start drawing on the blank board.</p></div>
 </div>
 
 <div class="hint" id="hint"></div>
@@ -1044,7 +1070,8 @@ svg.addEventListener('wheel', e => {
 
 /* ---------- keyboard ---------- */
 window.addEventListener('keydown', e => {
-  if (e.target.matches('input, textarea')) return;
+  if (e.key === 'Escape' && closeMenus()) return;
+  if (e.target.matches('input, textarea, select')) return;
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
@@ -1331,6 +1358,15 @@ async function importSVG(file) {
 }
 
 /* ---------- controls ---------- */
+// Menus close when you click outside them, pick an item, choose a file, or press Escape.
+const menus = [...document.querySelectorAll('details.menu')];
+const closeMenus = () => { let was = false; menus.forEach(m => { if (m.open) { m.open = false; was = true; } }); return was; };
+document.addEventListener('pointerdown', e => menus.forEach(m => { if (m.open && !m.contains(e.target)) m.open = false; }));
+menus.forEach(m => {
+  m.addEventListener('click', e => { if (e.target.closest('button.mi')) m.open = false; });
+  m.addEventListener('change', e => { if (e.target.type === 'file') m.open = false; });
+  m.addEventListener('toggle', () => { if (m.open) menus.forEach(o => { if (o !== m) o.open = false; }); });
+});
 $('t-pen').onclick = () => setTool('pen');
 $('t-edit').onclick = () => setTool('edit');
 $('t-pan').onclick = () => setTool('pan');
