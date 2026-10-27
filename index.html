@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Bézier tracer</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,400;0,500;0,600;0,700;1,400;1,700&display=swap">
 <style>
 :root{
   --bg:#e6e9ec; --panel:#fbfbfa; --ink:#23272c; --muted:#6a727b; --line:#d2d7dc;
@@ -81,7 +81,7 @@ body[data-tool="edit"] .label{pointer-events:auto;cursor:move}
 body[data-tool="text"] .label{pointer-events:auto;cursor:text}
 .texted{position:absolute;transform:translate(-50%,-50%);font-family:Figtree,system-ui,sans-serif;line-height:1.1;
   text-align:center;background:color-mix(in srgb,var(--panel) 70%,transparent);border:1px dashed var(--accent);border-radius:3px;
-  padding:0 4px;margin:0;outline:none;field-sizing:content;min-width:3ch}
+  padding:0 4px;margin:0;outline:none;field-sizing:content;min-width:3ch;resize:none;overflow:hidden;white-space:pre}
 .preview{fill:none;stroke:var(--accent);stroke-dasharray:4 4;opacity:.7;pointer-events:none;vector-effect:non-scaling-stroke}
 .hline{stroke:var(--handle);pointer-events:none}
 .hdot{fill:var(--panel);stroke:var(--handle);pointer-events:none}
@@ -198,6 +198,8 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
   </div>
   <div class="group" title="Font and size of the selected text and of new text">
     <select id="tfont" aria-label="Font"><option value="Figtree">Figtree</option></select>
+    <button id="tbold" aria-pressed="false" title="Bold (⌘B)" aria-label="Bold" style="font-weight:700">B</button>
+    <button id="titalic" aria-pressed="false" title="Italic (⌘I)" aria-label="Italic" style="font-style:italic;font-family:Georgia,serif">I</button>
     <label class="ctl">Size <input type="number" id="tsize" min="4" max="400" step="1" value="32" aria-label="Text size"></label>
   </div>
   <div class="group" title="Canvas size in pixels. Your drawing stays anchored to the top-left corner.">
@@ -216,7 +218,7 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
       <g id="overlay"></g>
     </g>
   </svg>
-  <input id="texted" class="texted" type="text" aria-label="Text" spellcheck="false" autocomplete="off" hidden>
+  <textarea id="texted" class="texted" rows="1" aria-label="Text" spellcheck="false" autocomplete="off" hidden></textarea>
   <aside class="layers" id="layers" aria-label="Layers" hidden>
     <div class="layers-head">Layers</div>
     <ol class="layer-list" id="layer-list"></ol>
@@ -254,10 +256,10 @@ let cur = null;            // index of path being drawn with the pen
 let sel = { p: -1, n: -1 };
 let tool = 'pen';
 let view = { x: 0, y: 0, k: 1 };
-let texts = [];            // [{x, y, text, size, color, font}]  x,y is the text's center
+let texts = [];            // [{x, y, text, size, color, font, bold, italic, rot}]  x,y is the center; text may have several lines
 let selT = -1;             // index of the selected text, or -1
 let editT = null;          // text being typed: {i (-1 for new), x, y, size, color}
-let style = { color: '#2f6fd6', width: 3, fill: '#f2c94c', fillOn: false, textSize: 32, font: 'Figtree' };
+let style = { color: '#2f6fd6', width: 3, fill: '#f2c94c', fillOn: false, textSize: 32, font: 'Figtree', bold: false, italic: false };
 let hover = null, drag = null, spaceDown = false, hasImage = false;
 let lastTap = { t: 0, x: 0, y: 0 };
 let extra = []; // additional selected paths (Shift-click)
@@ -441,6 +443,8 @@ function syncFill() {
   if (document.activeElement !== $('tsize')) $('tsize').value = t ? t.size : style.textSize;
   const fn = t ? (t.font || 'Figtree') : style.font;
   ensureFontOption(fn); $('tfont').value = fn;
+  $('tbold').setAttribute('aria-pressed', String(!!(t ? t.bold : style.bold)));
+  $('titalic').setAttribute('aria-pressed', String(!!(t ? t.italic : style.italic)));
   const list = selectedPaths(), p = list.length ? paths[list[0]] : null;
   // Stroke controls show the selected path's stroke, or the default for new paths.
   $('color').value = p ? p.stroke : style.color;
@@ -639,7 +643,7 @@ function render() {
     } else {
       const t = ref;
       if (editT && editT.i === i) return; // hidden while its editor is open
-      s += `<text class="label" data-t="${i}" x="${f(t.x)}" y="${f(t.y)}"${t.rot ? ` transform="rotate(${f(t.rot)} ${f(t.x)} ${f(t.y)})"` : ''} font-family="${esc(fontStack(t.font))}" font-size="${t.size}" fill="${t.color}" text-anchor="middle" dominant-baseline="central">${esc(t.text)}</text>`;
+      s += `<text class="label" data-t="${i}" x="${f(t.x)}" y="${f(t.y)}"${t.rot ? ` transform="rotate(${f(t.rot)} ${f(t.x)} ${f(t.y)})"` : ''}${textAttrs(t)} fill="${t.color}" text-anchor="middle" dominant-baseline="central">${textBody(t)}</text>`;
     }
   });
   pathsG.innerHTML = s;
@@ -730,7 +734,7 @@ const hints = {
   edit: 'Drag a shape or text to move it. Drag on empty space to select everything the box touches (<kbd>Shift</kbd> adds), or press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>A</kbd> for everything; drag a corner of the selection box to scale, or the round handle above it to rotate (<kbd>Shift</kbd> snaps to 15°). <kbd>⌘</kbd>+<kbd>D</kbd> duplicates and <kbd>Alt</kbd>-drag drags a copy; <kbd>⌘</kbd>+<kbd>G</kbd> groups the selection; the Object menu also combines shapes so inner ones cut holes. Drag points or handles to reshape. <kbd>]</kbd> / <kbd>[</kbd> bring forward / send backward (add <kbd>Shift</kbd> for front / back); <kbd>L</kbd> shows layers. <kbd>Alt</kbd>-drag a handle to turn a smooth point into a corner. Double-click a point to toggle smooth/corner, or double-click a path to add a point. <kbd>Delete</kbd> removes the selected point, or the whole path if only the path is selected. Arrow keys nudge the selection 1 px, <kbd>Shift</kbd>+arrows 10 px. <kbd>Shift</kbd>-click to add or remove items. When scaling, <kbd>Shift</kbd> stretches freely and <kbd>Alt</kbd> scales from the center.',
   rect: 'Drag from corner to corner to draw a rectangle. Hold <kbd>Shift</kbd> for a square, <kbd>Alt</kbd> to draw from the center. It’s a regular path, so you can reshape it in Edit mode.',
   circle: 'Drag from the center outward to draw a circle. It’s a regular Bézier path, so you can reshape it in Edit mode.',
-  text: 'Click to add text, or click existing text to change it. <kbd>Enter</kbd> places it, <kbd>Esc</kbd> cancels. The color comes from Fill and the size from Size. In Edit mode, drag text to move it and double-click to retype it.',
+  text: 'Click to add text, or click existing text to change it. <kbd>Enter</kbd> places it, <kbd>Shift</kbd>+<kbd>Enter</kbd> starts a new line, <kbd>Esc</kbd> cancels. <kbd>⌘</kbd>+<kbd>B</kbd> / <kbd>⌘</kbd>+<kbd>I</kbd> for bold / italic. The color comes from Fill and the size from Size. In Edit mode, drag text to move it and double-click to retype it.',
   pan: 'Drag to move around. Scroll to zoom. Hold <kbd>Space</kbd> in any tool to pan.'
 };
 function setTool(t) {
@@ -905,13 +909,20 @@ async function loadAllFonts() {
 setFontOptions(['Figtree', 'system-ui', ...FONT_CANDIDATES.filter(fontInstalled).sort((a, b) => a.localeCompare(b))]);
 
 /* ---------- text ---------- */
+const LINE_H = 1.2;
+const textAttrs = t => ` font-family="${esc(fontStack(t.font))}" font-size="${t.size}"${t.bold ? ' font-weight="700"' : ''}${t.italic ? ' font-style="italic"' : ''}`;
+function textBody(t) {
+  const lines = t.text.split('\n');
+  if (lines.length === 1) return esc(t.text);
+  return lines.map((ln, j) => `<tspan x="${f(t.x)}" dy="${f(j === 0 ? -(lines.length - 1) / 2 * LINE_H * t.size : LINE_H * t.size)}">${esc(ln) || ' '}</tspan>`).join('');
+}
 const hitText = e => (e.target.dataset && e.target.dataset.t !== undefined) ? +e.target.dataset.t : -1;
 function startTextEdit(i, pt) {
   commitText();
   finishPath();
   const ed = $('texted');
-  if (i >= 0) { const t = texts[i]; editT = { i, x: t.x, y: t.y, size: t.size, color: t.color, font: t.font || 'Figtree', rot: t.rot || 0 }; ed.value = t.text; }
-  else { editT = { i: -1, x: pt.x, y: pt.y, size: style.textSize, color: style.fill, font: style.font }; ed.value = ''; }
+  if (i >= 0) { const t = texts[i]; editT = { i, x: t.x, y: t.y, size: t.size, color: t.color, font: t.font || 'Figtree', rot: t.rot || 0, bold: !!t.bold, italic: !!t.italic }; ed.value = t.text; }
+  else { editT = { i: -1, x: pt.x, y: pt.y, size: style.textSize, color: style.fill, font: style.font, bold: style.bold, italic: style.italic }; ed.value = ''; }
   selT = i; extraT = []; sel = { p: -1, n: -1 }; extra = [];
   ed.hidden = false; placeEditor(); render();
   setTimeout(() => { ed.focus(); ed.select(); });
@@ -925,6 +936,16 @@ function placeEditor() {
   ed.style.color = editT.color;
   ed.style.fontFamily = fontStack(editT.font);
   ed.style.transform = `translate(-50%, -50%) rotate(${editT.rot || 0}deg)`;
+  ed.style.fontWeight = editT.bold ? '700' : '400';
+  ed.style.fontStyle = editT.italic ? 'italic' : 'normal';
+  sizeEditor();
+}
+// Grow the text box with its contents (for browsers without field-sizing).
+function sizeEditor() {
+  const ed = $('texted'), lines = ed.value.split('\n');
+  ed.rows = Math.max(1, lines.length);
+  ed.style.lineHeight = String(LINE_H);
+  ed.style.width = `calc(${Math.max(3, ...lines.map(l => l.length)) + 1}ch + 10px)`;
 }
 function commitText(cancel) {
   if (!editT) return;
@@ -932,21 +953,24 @@ function commitText(cancel) {
   editT = null; ed.hidden = true;
   if (!cancel) {
     if (e.i < 0) {
-      if (v.trim()) { snap(); texts.push({ x: e.x, y: e.y, text: v, size: e.size, color: e.color, font: e.font, z: nextZ() }); selT = texts.length - 1; extraT = []; }
+      if (v.trim()) { snap(); texts.push({ x: e.x, y: e.y, text: v, size: e.size, color: e.color, font: e.font, bold: e.bold, italic: e.italic, z: nextZ() }); selT = texts.length - 1; extraT = []; }
     } else if (!v.trim()) { snap(); texts.splice(e.i, 1); selT = -1; }
     else {
       const t = texts[e.i];
-      if (v !== t.text || e.size !== t.size || e.color !== t.color || e.font !== t.font) {
-        snap(); Object.assign(t, { text: v, size: e.size, color: e.color, font: e.font });
+      if (v !== t.text || e.size !== t.size || e.color !== t.color || e.font !== t.font || e.bold !== !!t.bold || e.italic !== !!t.italic) {
+        snap(); Object.assign(t, { text: v, size: e.size, color: e.color, font: e.font, bold: e.bold, italic: e.italic });
       }
     }
   }
   render(); save();
 }
 $('texted').addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); commitText(); }
+  const mod = e.metaKey || e.ctrlKey;
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitText(); }   // Shift+Enter adds a line
   else if (e.key === 'Escape') { e.preventDefault(); commitText(true); }
+  else if (mod && /^[bi]$/i.test(e.key)) { e.preventDefault(); toggleTextStyle(e.key.toLowerCase() === 'b' ? 'bold' : 'italic'); }
 });
+$('texted').addEventListener('input', sizeEditor);
 $('texted').addEventListener('blur', () => commitText());
 
 // The rotate handle sits just above the middle of the selection box.
@@ -1245,6 +1269,7 @@ window.addEventListener('keydown', e => {
   if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
   if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); finishPath(); selectAll(); return; }
+  if (mod && /^[bi]$/i.test(e.key) && selectedTexts().length) { e.preventDefault(); toggleTextStyle(e.key.toLowerCase() === 'b' ? 'bold' : 'italic'); return; }
   if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSel(); return; }
   if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); return; }
   if (mod) return;
@@ -1493,6 +1518,7 @@ async function importSVG(file) {
         const b = el.getBBox(), c = tp({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
         const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1, rot = Math.round(Math.atan2(m.b, m.a) * 1800 / Math.PI) / 10;
         items.push({ gk, t: { ...(rot ? { rot } : {}), x: c.x, y: c.y, text: str, size: Math.round(parseFloat(cs.fontSize) * scale * 10) / 10 || 16,
+          bold: parseInt(cs.fontWeight) >= 600, italic: cs.fontStyle === 'italic' || cs.fontStyle.startsWith('oblique'),
           color: cssColorToHex(cs.fill, shadow) || '#000000', font: (cs.fontFamily.split(',')[0] || 'Figtree').replace(/["']/g, '').trim() } });
         continue;
       }
@@ -1624,7 +1650,7 @@ function duplicateSel() { const d = copyData(); if (d) pasteData(d, 12, 12); }
 function pastePlainText(str) {
   const r = svg.getBoundingClientRect(), c = toDoc({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 });
   snap();
-  texts.push({ x: c.x, y: c.y, text: str.split('\n')[0].slice(0, 500), size: style.textSize, color: style.fill, font: style.font, z: nextZ() });
+  texts.push({ x: c.x, y: c.y, text: str.split(/\r?\n/).slice(0, 50).join('\n').slice(0, 5000), size: style.textSize, bold: style.bold, italic: style.italic, color: style.fill, font: style.font, z: nextZ() });
   if (tool !== 'edit') setTool('edit');
   setSelection([], [texts.length - 1]); render(); save();
 }
@@ -1721,6 +1747,17 @@ $('tsize').oninput = e => {
   save();
 };
 $('tsize').onchange = () => { sizeUndoOpen = false; };
+// Bold/italic: toggles the text being typed, or every selected text, and sets the default for new text.
+function toggleTextStyle(key) {
+  if (editT) { editT[key] = !editT[key]; style[key] = editT[key]; placeEditor(); syncFill(); save(); return; }
+  const ts = selectedTexts();
+  const next = ts.length ? !ts.every(i => texts[i][key]) : !style[key];
+  style[key] = next;
+  if (ts.length) { snap(); ts.forEach(i => { texts[i][key] = next; }); }
+  render(); save();
+}
+$('tbold').onclick = () => toggleTextStyle('bold');
+$('titalic').onclick = () => toggleTextStyle('italic');
 $('tfont').onchange = e => {
   const v = e.target.value;
   if (v === '__more') { syncFill(); loadAllFonts(); return; }
@@ -1751,7 +1788,7 @@ function svgPath(ref, pad) {
   return `${pad}<path${ref.fill ? ` fill="${ref.fill}"` : ''}${st}${fr} d="${d}"/>`;
 }
 function svgText(ref, pad) {
-  return `${pad}<text x="${f(ref.x)}" y="${f(ref.y)}"${ref.rot ? ` transform="rotate(${f(ref.rot)} ${f(ref.x)} ${f(ref.y)})"` : ''} stroke="none" font-family="${esc(fontStack(ref.font))}" font-size="${ref.size}" fill="${ref.color}" text-anchor="middle" dominant-baseline="central">${esc(ref.text)}</text>`;
+  return `${pad}<text x="${f(ref.x)}" y="${f(ref.y)}"${ref.rot ? ` transform="rotate(${f(ref.rot)} ${f(ref.x)} ${f(ref.y)})"` : ''} stroke="none"${textAttrs(ref)} fill="${ref.color}" text-anchor="middle" dominant-baseline="central">${textBody(ref)}</text>`;
 }
 function buildSVG() {
   const lines = [], doneCp = new Set();
@@ -1781,7 +1818,7 @@ const EYE = '<svg viewBox="0 0 16 16"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.
 const EYE_OFF = '<svg viewBox="0 0 16 16"><path d="M2 2l12 12M6.6 3.7A6.7 6.7 0 0 1 8 3.5C12.1 3.5 14.5 8 14.5 8a11 11 0 0 1-1.9 2.5M10 12.1a6 6 0 0 1-2 .4C3.9 12.5 1.5 8 1.5 8a11 11 0 0 1 2.6-3"/></svg>';
 const FOLDER = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M1.5 4.5v8h13v-7H7.5l-1.5-1.5h-4.5z"/></svg>';
 function layerName(it) {
-  if (it.k === 't') return `“${it.ref.text}”`;
+  if (it.k === 't') return `“${it.ref.text.split('\n')[0]}${it.ref.text.includes('\n') ? ' …' : ''}”`;
   const p = it.ref, base = p.kind === 'circle' ? 'Circle' : p.kind === 'rect' ? 'Rectangle' : p.closed ? 'Shape' : 'Path';
   return `${base} ${it.i + 1}`;
 }
