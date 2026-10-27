@@ -57,19 +57,21 @@ input[type=color]{width:32px;height:28px;padding:0;border:1px solid var(--line);
 .docs-list li.cur .dn{font-weight:600}
 .docs-list button.sm{padding:3px 8px;font-size:13px}
 .bar.props{gap:8px 22px;padding:6px 12px}
+#tools{gap:4px}
+#tools button{padding:5px 9px}
 .menu{position:relative}
 .menu>summary{list-style:none;font:inherit;color:var(--ink);background:var(--btn);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer;line-height:1.3;user-select:none}
 .menu>summary::-webkit-details-marker{display:none}
 .menu>summary::after{content:" ▾";color:var(--muted)}
 .menu>summary:hover{border-color:var(--muted)}
 .menu[open]>summary{background:var(--btn-on);color:var(--btn-on-ink);border-color:var(--btn-on)}
-.menu-pop{position:absolute;top:calc(100% + 4px);left:0;z-index:20;min-width:230px;display:flex;flex-direction:column;padding:4px;
+.menu-pop{position:absolute;top:calc(100% + 4px);left:0;z-index:20;min-width:250px;display:flex;flex-direction:column;padding:4px;
   background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.16)}
 .menu-pop .mi{display:flex;justify-content:space-between;gap:16px;width:100%;border:none;background:none;text-align:left;padding:6px 10px;border-radius:6px;cursor:pointer;color:var(--ink);white-space:nowrap}
 .menu-pop .mi:hover:not(:disabled),.menu-pop .mi:focus-visible{background:var(--btn)}
 .menu-pop .sc{color:var(--muted);font-size:12px}
 .menu-pop hr{border:none;border-top:1px solid var(--line);margin:4px 2px}
-.menu-pop .mrow{display:flex;gap:4px;padding:4px 6px;flex-wrap:wrap}
+.menu-pop .mrow{display:flex;gap:4px;padding:4px 6px}
 .menu-pop .mrow button{padding:4px 7px;display:grid;place-items:center}
 .menu-pop .mi[aria-pressed="true"]::after{content:"✓";color:var(--accent)}
 .menu-pop label.mi.ctl{cursor:default;align-items:center}
@@ -181,6 +183,7 @@ label.opt{color:var(--ink);margin-bottom:6px}
       <button class="mi" id="f-open">Open drawing…</button>
       <button class="mi" id="f-rename">Rename…</button>
       <button class="mi" id="f-dupdoc">Duplicate drawing</button>
+      <button class="mi" id="clear" title="Remove every shape and text from this drawing (undoable)">Clear drawing</button>
       <hr>
       <button class="mi" id="f-saveproj" title="Download everything, including the sketch, as one file you can open again here or on another computer">Save project file…</button>
       <label class="filebtn mi">Open project file…<input type="file" id="projfile" accept=".json,.bztrace,application/json"></label>
@@ -214,13 +217,14 @@ label.opt{color:var(--ink);margin-bottom:6px}
       <button class="mi" id="o-cut">Cut <span class="sc">⌘X</span></button>
       <button class="mi" id="o-paste">Paste <span class="sc">⌘V</span></button>
       <button class="mi" id="o-dup">Duplicate <span class="sc">⌘D</span></button>
+      <button class="mi" id="del">Delete <span class="sc">⌫</span></button>
       <hr>
       <button class="mi" id="o-group">Group <span class="sc">⌘G</span></button>
       <button class="mi" id="o-ungroup">Ungroup <span class="sc">⇧⌘G</span></button>
       <hr>
-      <div class="mlabel">Align (to each other, or to the canvas for one item)</div>
+      <div class="mlabel" title="Several items line up with each other; a single item lines up with the canvas">Align</div>
       <div class="mrow"><button id="a-l" title="Align left (Alt+A)" aria-label="Align left (Alt+A)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M2 1.5v13" fill="none"/><rect x="3.5" y="3.5" width="9" height="3" stroke="none"/><rect x="3.5" y="9.5" width="5" height="3" stroke="none"/></svg></button><button id="a-hc" title="Align centers horizontally (Alt+H)" aria-label="Align centers horizontally (Alt+H)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M8 1.5v13" fill="none"/><rect x="3" y="3.5" width="10" height="3" stroke="none"/><rect x="5" y="9.5" width="6" height="3" stroke="none"/></svg></button><button id="a-r" title="Align right (Alt+D)" aria-label="Align right (Alt+D)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M14 1.5v13" fill="none"/><rect x="3.5" y="3.5" width="9" height="3" stroke="none"/><rect x="7.5" y="9.5" width="5" height="3" stroke="none"/></svg></button><button id="a-t" title="Align top (Alt+W)" aria-label="Align top (Alt+W)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M1.5 2h13" fill="none"/><rect x="3.5" y="3.5" width="3" height="9" stroke="none"/><rect x="9.5" y="3.5" width="3" height="5" stroke="none"/></svg></button><button id="a-vc" title="Align middles vertically (Alt+V)" aria-label="Align middles vertically (Alt+V)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M1.5 8h13" fill="none"/><rect x="3.5" y="3" width="3" height="10" stroke="none"/><rect x="9.5" y="5" width="3" height="6" stroke="none"/></svg></button><button id="a-b" title="Align bottom (Alt+S)" aria-label="Align bottom (Alt+S)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M1.5 14h13" fill="none"/><rect x="3.5" y="3.5" width="3" height="9" stroke="none"/><rect x="9.5" y="7.5" width="3" height="5" stroke="none"/></svg></button></div>
-      <div class="mlabel">Distribute (even gaps, 3 or more items)</div>
+      <div class="mlabel" title="Even gaps between 3 or more items">Distribute</div>
       <div class="mrow"><button id="d-h" title="Distribute horizontally (Alt+Shift+H)" aria-label="Distribute horizontally (Alt+Shift+H)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M1.5 1.5v13M14.5 1.5v13" fill="none"/><rect x="6.5" y="4" width="3" height="8" stroke="none"/></svg></button><button id="d-v" title="Distribute vertically (Alt+Shift+V)" aria-label="Distribute vertically (Alt+Shift+V)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M1.5 1.5h13M1.5 14.5h13" fill="none"/><rect x="4" y="6.5" width="8" height="3" stroke="none"/></svg></button></div>
       <hr>
       <button class="mi" id="o-rot-r">Rotate 90° right</button>
@@ -245,8 +249,6 @@ label.opt{color:var(--ink);margin-bottom:6px}
     <button id="layers-btn" aria-pressed="false" aria-controls="layers" title="Show the layers panel (L)">Layers</button>
     <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
     <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
-    <button id="del" title="Delete selected (Delete)">Delete</button>
-    <button id="clear" title="Remove all paths">Clear</button>
     <button id="export" class="primary">Export</button>
   </div>
 </div>
@@ -973,7 +975,7 @@ function render() {
 /* ---------- tools ---------- */
 const hints = {
   pen: 'Click to place a corner point; click and drag to pull out curve handles. Click the first point to close the shape. <kbd>Enter</kbd> or <kbd>Esc</kbd> finishes the path. Click on an existing path to add a point to it, or click an open path’s end to keep drawing it.',
-  edit: 'Drag a shape or text to move it. Drag on empty space to select everything the box touches (<kbd>Shift</kbd> adds), or press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>A</kbd> for everything; drag a corner of the selection box to scale, or the round handle above it to rotate (<kbd>Shift</kbd> snaps to 15°). <kbd>⌘</kbd>+<kbd>D</kbd> duplicates and <kbd>Alt</kbd>-drag drags a copy; <kbd>⌘</kbd>+<kbd>G</kbd> groups the selection; the Object menu also combines shapes so inner ones cut holes. Drag points or handles to reshape. <kbd>]</kbd> / <kbd>[</kbd> bring forward / send backward (add <kbd>Shift</kbd> for front / back); <kbd>L</kbd> shows layers. <kbd>Alt</kbd>-drag a handle to turn a smooth point into a corner. Double-click a point to toggle smooth/corner, or double-click a path to add a point. <kbd>Delete</kbd> removes the selected point, or the whole path if only the path is selected. Arrow keys nudge the selection 1 px, <kbd>Shift</kbd>+arrows 10 px. <kbd>Shift</kbd>-click to add or remove items. When scaling, <kbd>Shift</kbd> stretches freely and <kbd>Alt</kbd> scales from the center.',
+  edit: 'Drag items to move them; drag empty space to box-select (<kbd>Shift</kbd> adds), <kbd>⌘</kbd><kbd>A</kbd> for all. Drag box corners to scale, the round handle to rotate. Drag points or handles to reshape; double-click a point for smooth/corner, or a path to add a point. <kbd>⌘</kbd><kbd>D</kbd> duplicates, <kbd>Alt</kbd>-drag copies, <kbd>⌘</kbd><kbd>G</kbd> groups, arrows nudge, <kbd>[</kbd> <kbd>]</kbd> restack. More in the Object menu.',
   rect: 'Drag from corner to corner to draw a rectangle. Hold <kbd>Shift</kbd> for a square, <kbd>Alt</kbd> to draw from the center. Round its corners with Corners in the style bar. It’s a regular path, so you can reshape it in Edit mode.',
   polygon: 'Drag from the center outward to draw a polygon; the first corner follows the pointer. <kbd>Shift</kbd> snaps the angle. Set the number of sides in the style bar.',
   star: 'Drag from the center outward to draw a star; the first point follows the pointer. <kbd>Shift</kbd> snaps the angle. Set the points and inner radius in the style bar.',
