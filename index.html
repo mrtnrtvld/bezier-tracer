@@ -127,6 +127,11 @@ body[data-tool="text"] .label{pointer-events:auto;cursor:text}
 .layer.grp .lname{font-weight:600}
 .layer.indent{padding-left:20px}
 .layer .sw svg{display:block}
+.layer .lockb{border:none;background:none;padding:3px;display:grid;place-items:center;color:var(--muted);opacity:0}
+.layer:hover .lockb,.layer .lockb.on,.layer .lockb:focus-visible{opacity:1}
+.layer .lockb svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.layer.sketchrow{border-top:1px dashed var(--line);margin-top:4px;padding-top:6px;cursor:default}
+.hit.locked,.label.locked{pointer-events:none!important}
 .layers-none{color:var(--muted);padding:10px;font-size:13px}
 .layers-foot{display:flex;gap:4px;padding:6px;border-top:1px solid var(--line)}
 .layers-foot button{flex:1;padding:4px 0}
@@ -182,6 +187,9 @@ label.opt{color:var(--ink);margin-bottom:6px}
     <button id="docname" class="docname" title="Rename this drawing">Untitled</button>
     <details class="menu" id="m-sketch"><summary>Sketch</summary><div class="menu-pop">
       <label class="filebtn mi">Load sketch…<input type="file" id="file" accept="image/*"></label>
+      <button class="mi" id="sk-show" aria-pressed="true">Show sketch <span class="sc">⇧S</span></button>
+      <button class="mi" id="sk-lock" aria-pressed="true" title="Unlock to move or resize the sketch in Edit mode">Lock sketch</button>
+      <button class="mi" id="sk-reset" title="Put the sketch back at the top-left corner at its own size">Reset sketch position</button>
       <label class="mi ctl">Opacity <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.5" aria-label="Sketch opacity"></label>
       <hr>
       <button class="mi" id="flip-h" aria-pressed="false" title="Flip sketch and drawing horizontally">Flip all horizontally</button>
@@ -214,6 +222,9 @@ label.opt{color:var(--ink);margin-bottom:6px}
       <button class="mi" id="o-rot-l">Rotate 90° left</button>
       <button class="mi" id="o-flip-h">Flip horizontally <span class="sc">⇧H</span></button>
       <button class="mi" id="o-flip-v">Flip vertically <span class="sc">⇧V</span></button>
+      <hr>
+      <button class="mi" id="o-lock" title="Locked items can't be clicked or box-selected on the canvas">Lock selection</button>
+      <button class="mi" id="o-unlock">Unlock all</button>
       <hr>
       <button class="mi" id="o-combine" title="Draw the selected paths as one shape, so shapes inside others cut holes">Combine shapes (cut holes)</button>
       <button class="mi" id="o-release" title="Split a combined shape back into separate paths">Release combined shape</button>
@@ -365,14 +376,16 @@ let undoStack = [], redoStack = [];
 const f = v => Math.round(v * 100) / 100;
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 // Undo steps also remember the selection, so undo/redo put it back the way it was.
-const state = () => JSON.stringify({ paths, texts, cur, flip, doc, s: { p: sel.p, n: sel.n, extra, selT, extraT } });
+const state = () => JSON.stringify({ paths, texts, cur, flip, doc, skRect, s: { p: sel.p, n: sel.n, extra, selT, extraT } });
 const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 function pushUndo(s) { undoStack.push(s); if (undoStack.length > 200) undoStack.shift(); redoStack = []; }
 function snap() { pushUndo(state()); }
 function restore(s) {
   const o = JSON.parse(s); paths = o.paths; texts = o.texts || []; cur = o.cur; selT = -1; extraT = []; normZ(); normStroke(); normStructure();
-  if (o.flip) { flip = o.flip; applyFlip(); }
+  if (o.skRect) skRect = o.skRect;
+  if (o.flip) flip = o.flip;
+  applyFlip();
   if (o.doc && (o.doc.w !== doc.w || o.doc.h !== doc.h)) { setDoc(o.doc.w, o.doc.h); fit(); }
   extra = [];
   if (cur !== null && (!paths[cur] || paths[cur].closed)) cur = null;
@@ -403,7 +416,7 @@ function lsSet(k, v) {
 }
 const docIndex = () => lsGet(K_INDEX) || [];
 const newDocId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const docData = () => ({ name: docName, paths, texts, doc, flip, sketchOp: +$('opacity').value });
+const docData = () => ({ name: docName, paths, texts, doc, flip, sketchOp: +$('opacity').value, skRect, skHidden, skLocked });
 function save() {
   lsSet(K_PREFS, style);
   if (!docId) return;
@@ -434,6 +447,7 @@ function load() {
 function applyDocData(d) {
   paths = d.paths || []; texts = d.texts || []; doc = d.doc || { w: 1000, h: 750 };
   flip = d.flip || { h: false, v: false }; docName = d.name || 'Untitled';
+  skRect = d.skRect || { x: 0, y: 0, w: 0, h: 0 }; skHidden = !!d.skHidden; skLocked = d.skLocked !== false; sketchSel = false;
   cur = null; sel = { p: -1, n: -1 }; extra = []; selT = -1; extraT = []; undoStack = []; redoStack = [];
   normZ(); normStroke(); normStructure();
   $('opacity').value = d.sketchOp ?? 0.5; img.setAttribute('opacity', $('opacity').value);
@@ -728,12 +742,13 @@ function selectedTexts() {
 }
 // Replace the whole selection: path indexes and text indexes.
 function setSelection(ps, ts) {
+  sketchSel = false;
   sel = { p: ps.length ? ps[0] : -1, n: -1 }; extra = ps.slice(1);
   selT = ts.length ? ts[0] : -1; extraT = ts.slice(1);
 }
 function selectAll() {
   if (tool !== 'edit') setTool('edit');
-  setSelection(paths.map((p, i) => i).filter(i => !paths[i].hidden), texts.map((t, i) => i).filter(i => !texts[i].hidden));
+  setSelection(paths.map((p, i) => i).filter(i => !paths[i].hidden && !paths[i].locked), texts.map((t, i) => i).filter(i => !texts[i].hidden && !texts[i].locked));
   render();
 }
 // A text's corners in document space (its bounding box, turned by its rotation).
@@ -807,9 +822,16 @@ function resizeCanvas() {
   snap(); setDoc(w, h); fit(); save();
 }
 let flip = { h: false, v: false };
+// The sketch sits in skRect (document coordinates). Flipping mirrors the picture within that box.
+let skRect = { x: 0, y: 0, w: 0, h: 0 }, skHidden = false, skLocked = true, sketchSel = false;
 function applyFlip() {
+  img.setAttribute('x', skRect.x); img.setAttribute('y', skRect.y);
+  img.setAttribute('width', skRect.w); img.setAttribute('height', skRect.h);
+  img.setAttribute('visibility', skHidden ? 'hidden' : 'visible');
   img.setAttribute('transform',
-    `translate(${flip.h ? doc.w : 0} ${flip.v ? doc.h : 0}) scale(${flip.h ? -1 : 1} ${flip.v ? -1 : 1})`);
+    `translate(${flip.h ? 2 * skRect.x + skRect.w : 0} ${flip.v ? 2 * skRect.y + skRect.h : 0}) scale(${flip.h ? -1 : 1} ${flip.v ? -1 : 1})`);
+  $('sk-show').setAttribute('aria-pressed', String(!skHidden));
+  $('sk-lock').setAttribute('aria-pressed', String(skLocked));
   $('flip-h').setAttribute('aria-pressed', String(flip.h));
   $('flip-v').setAttribute('aria-pressed', String(flip.v));
 }
@@ -831,11 +853,11 @@ function render() {
         d = combinedD(p.cp); fr = ` fill-rule="${p.fr || 'evenodd'}"`;
       } else d = pathD(p);
       s += `<path class="trace" d="${d}"${fr} fill="${p.fill || 'none'}" stroke="${p.stroke}" stroke-width="${p.sw}"${lookAttrs(p)}/>`;
-      s += `<path class="hit${p.fill ? ' filled' : ''}" data-p="${i}" d="${d}"${fr} fill="${p.fill ? 'transparent' : 'none'}" stroke-width="${14 / k}"/>`;
+      s += `<path class="hit${p.fill ? ' filled' : ''}${p.locked ? ' locked' : ''}" data-p="${i}" d="${d}"${fr} fill="${p.fill ? 'transparent' : 'none'}" stroke-width="${14 / k}"/>`;
     } else {
       const t = ref;
       if (editT && editT.i === i) return; // hidden while its editor is open
-      s += `<text class="label" data-t="${i}" x="${f(t.x)}" y="${f(t.y)}"${t.rot ? ` transform="rotate(${f(t.rot)} ${f(t.x)} ${f(t.y)})"` : ''}${textAttrs(t)}${opAttr(t)} fill="${t.color}" text-anchor="middle" dominant-baseline="central">${textBody(t)}</text>`;
+      s += `<text class="label${t.locked ? ' locked' : ''}" data-t="${i}" x="${f(t.x)}" y="${f(t.y)}"${t.rot ? ` transform="rotate(${f(t.rot)} ${f(t.x)} ${f(t.y)})"` : ''}${textAttrs(t)}${opAttr(t)} fill="${t.color}" text-anchor="middle" dominant-baseline="central">${textBody(t)}</text>`;
     }
   });
   pathsG.innerHTML = s;
@@ -847,7 +869,7 @@ function render() {
 
   if (tool === 'edit') {
     paths.forEach((p, i) => {
-      if (i === active || p.hidden) return;
+      if (i === active || p.hidden || p.locked) return;
       p.nodes.forEach(n => { o += `<circle class="anchor-dim" cx="${n.x}" cy="${n.y}" r="${2.5 / k}"/>`; });
     });
   }
@@ -905,6 +927,11 @@ function render() {
       o += `<circle class="rothandle" cx="${rh.x}" cy="${rh.y}" r="${5 / k}" stroke-width="${1.5 / k}"/>`;
       if (drag && drag.type === 'rotate') o += `<text class="rotlabel" x="${rh.x + 10 / k}" y="${rh.y - 8 / k}" font-size="${12 / k}">${Math.round(drag.deg || 0)}°</text>`;
     }
+  }
+  if (sketchSel && hasImage && tool === 'edit') {
+    const b = skRect, cs = 4.5 / k;
+    o += `<rect class="bbox" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" stroke-width="${1 / k}" stroke-dasharray="${4 / k} ${3 / k}"/>`;
+    for (const [x, y] of skCorners()) o += `<rect class="bcorner" x="${x - cs}" y="${y - cs}" width="${2 * cs}" height="${2 * cs}" stroke-width="${1.5 / k}"/>`;
   }
   // Outline each selected text (outside Edit mode this is the only selection cue).
   const ts = selectedTexts();
@@ -1176,10 +1203,22 @@ $('texted').addEventListener('keydown', e => {
 $('texted').addEventListener('input', sizeEditor);
 $('texted').addEventListener('blur', () => commitText());
 
+const skCorners = () => [[skRect.x, skRect.y], [skRect.x + skRect.w, skRect.y], [skRect.x + skRect.w, skRect.y + skRect.h], [skRect.x, skRect.y + skRect.h]];
+const onSketch = pt => hasImage && !skHidden && !skLocked && pt.x >= skRect.x && pt.x <= skRect.x + skRect.w && pt.y >= skRect.y && pt.y <= skRect.y + skRect.h;
 // The rotate handle sits just above the middle of the selection box.
 const rotHandle = box => ({ x: (box.x0 + box.x1) / 2, y: box.y0 - 26 / view.k });
 function editDown(pt, e) {
   const hr = 8 / view.k;
+  // An unlocked sketch: its corners resize it (keeping its shape), its body moves it.
+  if (sketchSel && hasImage && !skLocked) {
+    const cs = skCorners();
+    for (let i = 0; i < 4; i++) if (dist(pt, { x: cs[i][0], y: cs[i][1] }) < hr) {
+      const o = cs[(i + 2) % 4];
+      drag = { type: 'sketch-scale', pre: state(), corner: { x: cs[i][0], y: cs[i][1] }, opp: { x: o[0], y: o[1] }, orig: { ...skRect },
+        center: { x: skRect.x + skRect.w / 2, y: skRect.y + skRect.h / 2 } };
+      return;
+    }
+  }
   // Scale-box corners come first so they can be grabbed even when they sit on top of an item.
   const box = scaleBox();
   if (box && dist(pt, rotHandle(box)) < hr) {
@@ -1232,7 +1271,7 @@ function editDown(pt, e) {
   }
   const order = [...paths.keys()].sort((a, b) => (b === sel.p) - (a === sel.p));
   for (const pi of order) {
-    if (paths[pi].hidden) continue;
+    if (paths[pi].hidden || paths[pi].locked) continue;
     const ns = paths[pi].nodes;
     for (let i = ns.length - 1; i >= 0; i--) {
       if (dist(pt, ns[i]) < hr) {
@@ -1249,15 +1288,20 @@ function editDown(pt, e) {
     if (!keepGroup) setSelection(ups, uts);
     startMove(pt, e); return;
   }
+  if (!e.shiftKey && onSketch(pt)) {
+    setSelection([], []); sketchSel = true;
+    drag = { type: 'sketch', start: pt, orig: { ...skRect }, pre: state() };
+    render(); return;
+  }
   // Empty space: start a selection box. Shift keeps what's already selected.
   if (!e.shiftKey) setSelection([], []);
   const samples = paths.map((p, pi) => {
-    if (p.hidden) return null;
+    if (p.hidden || p.locked) return null;
     const n = p.nodes, segs = p.closed ? n.length : n.length - 1, pts = n.slice();
     for (let i = 0; i < segs; i++) for (let s = 1; s < 16; s++) pts.push(bez(n[i], n[(i + 1) % n.length], s / 16));
     return pts;
   });
-  const tboxes = texts.map((t, i) => t.hidden ? null : textBox(i));
+  const tboxes = texts.map((t, i) => t.hidden || t.locked ? null : textBox(i));
   drag = { type: 'marquee', a: pt, b: pt, samples, tboxes, baseP: selectedPaths(), baseT: selectedTexts() };
   render();
 }
@@ -1525,6 +1569,15 @@ svg.addEventListener('pointermove', e => {
     }
     case 'marquee':
       drag.b = pt; marqueeSelect(drag); render(); break;
+    case 'sketch':
+      skRect = { ...drag.orig, x: drag.orig.x + pt.x - drag.start.x, y: drag.orig.y + pt.y - drag.start.y };
+      applyFlip(); render(); break;
+    case 'sketch-scale': {
+      const a = e.altKey ? drag.center : drag.opp, c = drag.corner, vx = c.x - a.x, vy = c.y - a.y, L = vx * vx + vy * vy;
+      const k = Math.max(0.02, L ? ((pt.x - a.x) * vx + (pt.y - a.y) * vy) / L : 1), o = drag.orig;
+      skRect = { x: a.x + (o.x - a.x) * k, y: a.y + (o.y - a.y) * k, w: o.w * k, h: o.h * k };
+      applyFlip(); render(); break;
+    }
     case 'rect': {
       const sp = snapPoint(pt, drag.T, e); pt = sp.pt; drag.guides = sp.guides;
       let dx = pt.x - drag.a.x, dy = pt.y - drag.a.y;
@@ -1643,7 +1696,7 @@ window.addEventListener('keydown', e => {
     case 'c': case 'C': setTool('circle'); break;
     case 'r': case 'R': setTool('rect'); break;
     case 'y': case 'Y': setTool('polygon'); break;
-    case 's': case 'S': setTool('star'); break;
+    case 's': case 'S': if (e.shiftKey) { if (hasImage) setSketchShown(skHidden); } else setTool('star'); break;
     case '\\': setTool('line'); break;
     case 't': case 'T': setTool('text'); break;
     case 'v': case 'V': if (e.shiftKey) flipSel('v'); else setTool('edit'); break;
@@ -1666,10 +1719,10 @@ function zoomCenter(fct) { const r = svg.getBoundingClientRect(); zoomAt(r.width
 let sketch = null;   // { url, w, h } of the current sketch image
 function showSketch(sk) {
   sketch = sk;
-  if (sk) { img.setAttribute('width', sk.w); img.setAttribute('height', sk.h); img.setAttribute('href', sk.url); }
-  else img.removeAttribute('href');
+  if (sk) { img.setAttribute('href', sk.url); if (!(skRect.w > 0)) skRect = { x: 0, y: 0, w: sk.w, h: sk.h }; }
+  else { img.removeAttribute('href'); sketchSel = false; }
   hasImage = !!sk; $('clear-sketch').disabled = !sk;
-  render();
+  applyFlip(); render();
 }
 function loadImage(file) {
   if (!file || !file.type.startsWith('image/')) return;
@@ -1680,6 +1733,7 @@ function loadImage(file) {
       // The sketch keeps its own size; the canvas starts out matching it.
       if (im.naturalWidth !== doc.w || im.naturalHeight !== doc.h) snap();
       setDoc(im.naturalWidth, im.naturalHeight);
+      skRect = { x: 0, y: 0, w: im.naturalWidth, h: im.naturalHeight };
       showSketch({ url: reader.result, w: im.naturalWidth, h: im.naturalHeight });
       idb.set(docId, sketch);
       fit(); save();
@@ -1964,6 +2018,17 @@ function flipSel(axis) {
   transformSel(m, t => { Object.assign(t, m(t)); if (t.rot) t.rot = -t.rot; });
 }
 
+/* ---------- locking ---------- */
+function setLocked(refs, on) {
+  if (!refs.length) return;
+  snap();
+  refs.forEach(r => { if (on) r.locked = true; else delete r.locked; });
+  if (on) selectRefs(selectedRefs().filter(r => !refs.includes(r)));
+  render(); save();
+}
+const lockSel = () => setLocked(expandSel(selectedPaths(), selectedTexts()).flatMap((ix, j) => ix.map(i => (j ? texts : paths)[i])), true);
+const unlockAll = () => setLocked([...paths, ...texts].filter(r => r.locked), false);
+
 /* ---------- align and distribute ---------- */
 // Units move as a whole: a group, a combined shape, or a single item.
 function selUnits() {
@@ -2103,13 +2168,19 @@ $('flip-h').onclick = () => flipAll('h');
 $('flip-v').onclick = () => flipAll('v');
 $('clear-sketch').onclick = () => {
   showSketch(null); idb.del(docId);
-  flip = { h: false, v: false }; applyFlip(); save();
+  flip = { h: false, v: false }; skRect = { x: 0, y: 0, w: 0, h: 0 }; applyFlip(); save();
 };
+function setSketchShown(on) { skHidden = !on; if (skHidden) sketchSel = false; applyFlip(); render(); save(); }
+function setSketchLocked(on) { skLocked = on; if (on) sketchSel = false; applyFlip(); render(); save(); }
+$('sk-show').onclick = () => setSketchShown(skHidden);
+$('sk-lock').onclick = () => setSketchLocked(!skLocked);
+$('sk-reset').onclick = () => { if (!sketch) return; snap(); skRect = { x: 0, y: 0, w: sketch.w, h: sketch.h }; applyFlip(); render(); save(); };
 // Mirror the sketch and every path together so they stay aligned.
 function flipAll(axis) {
   finishPath();
   snap();
   const m = axis === 'h' ? (q => { q.x = doc.w - q.x; }) : (q => { q.y = doc.h - q.y; });
+  if (axis === 'h') skRect.x = doc.w - skRect.x - skRect.w; else skRect.y = doc.h - skRect.y - skRect.h;
   paths.forEach(p => p.nodes.forEach(n => { m(n); if (n.hi) m(n.hi); if (n.ho) m(n.ho); }));
   texts.forEach(t => { m(t); if (t.rot) t.rot = -t.rot; }); // text stays readable; only its position and tilt mirror
   flip[axis] = !flip[axis];
@@ -2260,6 +2331,9 @@ function buildSVG(fontCSS) {
 // a combined shape is a single row. Each row stands for a "unit" id: g:<id>, c:<id>, p:<index> or t:<index>.
 const EYE = '<svg viewBox="0 0 16 16"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>';
 const EYE_OFF = '<svg viewBox="0 0 16 16"><path d="M2 2l12 12M6.6 3.7A6.7 6.7 0 0 1 8 3.5C12.1 3.5 14.5 8 14.5 8a11 11 0 0 1-1.9 2.5M10 12.1a6 6 0 0 1-2 .4C3.9 12.5 1.5 8 1.5 8a11 11 0 0 1 2.6-3"/></svg>';
+const LOCK = '<svg viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>';
+const UNLOCK = '<svg viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 4.9-.6"/></svg>';
+const PICTURE = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M2 12l4-4 3 3 2-2 3 3"/></svg>';
 const FOLDER = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M1.5 4.5v8h13v-7H7.5l-1.5-1.5h-4.5z"/></svg>';
 function layerName(it) {
   if (it.k === 't') return `“${it.ref.text.split('\n')[0]}${it.ref.text.includes('\n') ? ' …' : ''}”`;
@@ -2292,19 +2366,24 @@ function renderLayers() {
   const selSet = new Set(selectedRefs()), rows = [];
   const row = (id, refs, cls) => {
     const r = refs.slice().sort((a, b) => a.z - b.z)[0], isT = texts.includes(r);
-    const on = refs.every(x => selSet.has(x)), off = refs.every(x => x.hidden), name = unitName(id, refs);
+    const on = refs.every(x => selSet.has(x)), off = refs.every(x => x.hidden), locked = refs.every(x => x.locked), name = unitName(id, refs);
     const sw = id.startsWith('g:') ? `<span class="sw">${FOLDER}</span>`
       : isT ? `<span class="sw" style="color:${r.color};font-family:${esc(fontStack(r.font))}">T</span>`
       : `<span class="sw" style="background:${r.fill || 'transparent'};border:2px solid ${r.sw > 0 ? r.stroke : 'transparent'}"></span>`;
     rows.push(`<li class="layer ${cls}${on ? ' on' : ''}${off ? ' off' : ''}" draggable="true" data-u="${id}">` +
       `<button class="eye" data-eye aria-label="${off ? 'Show' : 'Hide'} ${esc(name)}" title="${off ? 'Show' : 'Hide'}">${off ? EYE_OFF : EYE}</button>` +
-      `${sw}<span class="lname">${esc(name)}</span></li>`);
+      `${sw}<span class="lname">${esc(name)}</span>` +
+      `<button class="lockb${locked ? ' on' : ''}" data-lock aria-label="${locked ? 'Unlock' : 'Lock'} ${esc(name)}" title="${locked ? 'Unlock' : 'Lock'}">${locked ? LOCK : UNLOCK}</button></li>`);
   };
   buildUnits(layerItems().map(x => x.ref), 'top').reverse().forEach(u => {
     const id = unitId(u);
     row(id, u, id.startsWith('g:') ? 'grp' : '');
     if (id.startsWith('g:')) buildUnits(u, 'inner').reverse().forEach(iu => row(unitId(iu, true), iu, 'indent'));
   });
+  if (hasImage) rows.push(`<li class="layer sketchrow${sketchSel ? ' on' : ''}${skHidden ? ' off' : ''}" data-u="sketch">` +
+    `<button class="eye" data-eye aria-label="${skHidden ? 'Show' : 'Hide'} sketch" title="${skHidden ? 'Show' : 'Hide'}">${skHidden ? EYE_OFF : EYE}</button>` +
+    `<span class="sw">${PICTURE}</span><span class="lname">Sketch</span>` +
+    `<button class="lockb${skLocked ? ' on' : ''}" data-lock aria-label="${skLocked ? 'Unlock' : 'Lock'} sketch" title="${skLocked ? 'Unlock to move or resize it' : 'Lock'}">${skLocked ? LOCK : UNLOCK}</button></li>`);
   const html = rows.join('') || '<li class="layers-none">Nothing here yet. Shapes and text you add will be listed, front to back.</li>';
   if (html !== layersHtml) { $('layer-list').innerHTML = html; layersHtml = html; }
 }
@@ -2325,7 +2404,14 @@ function selectLayer(id, add) {
 const layerList = $('layer-list'), list = layerList;
 list.addEventListener('click', e => {
   const li = e.target.closest('.layer'); if (!li) return;
+  if (li.dataset.u === 'sketch') {
+    if (e.target.closest('[data-eye]')) setSketchShown(skHidden);
+    else if (e.target.closest('[data-lock]')) setSketchLocked(!skLocked);
+    else if (!skLocked && !skHidden) { if (tool !== 'edit') setTool('edit'); setSelection([], []); sketchSel = true; render(); }
+    return;
+  }
   const id = li.dataset.u, refs = unitRefs(id); if (!refs.length) return;
+  if (e.target.closest('[data-lock]')) { setLocked(refs, !refs.every(r => r.locked)); return; }
   if (e.target.closest('[data-eye]')) {
     commitText(); snap();
     const hide = !refs.every(r => r.hidden);
@@ -2340,11 +2426,11 @@ list.addEventListener('click', e => {
 let dragRow = null;
 const clearDrop = () => list.querySelectorAll('.drop-above,.drop-below').forEach(n => n.classList.remove('drop-above', 'drop-below'));
 list.addEventListener('dragstart', e => {
-  const li = e.target.closest('.layer'); if (!li) return;
+  const li = e.target.closest('.layer'); if (!li || li.dataset.u === 'sketch') { e.preventDefault(); return; }
   dragRow = li.dataset.u; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', '');
 });
 list.addEventListener('dragover', e => {
-  const li = e.target.closest('.layer'); if (!li || !dragRow) return;
+  const li = e.target.closest('.layer'); if (!li || !dragRow || li.dataset.u === 'sketch') return;
   e.preventDefault(); clearDrop();
   const r = li.getBoundingClientRect();
   li.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-above' : 'drop-below');
@@ -2354,7 +2440,7 @@ list.addEventListener('dragend', () => { dragRow = null; clearDrop(); });
 list.addEventListener('drop', e => {
   e.preventDefault();
   const li = e.target.closest('.layer'); clearDrop();
-  if (!li || !dragRow) return;
+  if (!li || !dragRow || li.dataset.u === 'sketch') return;
   const src = dragRow; dragRow = null;
   let tgt = li.dataset.u;
   const moved = unitRefs(src), tRefs0 = unitRefs(tgt);
@@ -2400,6 +2486,8 @@ $('o-flip-v').onclick = () => flipSel('v');
 $('o-group').onclick = groupSel;
 $('o-ungroup').onclick = ungroupSel;
 $('o-combine').onclick = combineSel;
+$('o-lock').onclick = lockSel;
+$('o-unlock').onclick = unlockAll;
 $('o-release').onclick = releaseSel;
 $('z-front').onclick = () => arrange('front');
 $('z-up').onclick = () => arrange('up');
@@ -2667,6 +2755,7 @@ window.addEventListener('resize', () => { applyView(); });
 /* ---------- start ---------- */
 load();
 setDoc(doc.w, doc.h);
+applyFlip();
 idb.get(docId).then(sk => { if (sk) showSketch(sk); });
 setTool('pen');
 syncView();
