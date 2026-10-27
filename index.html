@@ -152,6 +152,9 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
 .opts{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;margin-bottom:8px}
 label.opt{color:var(--ink);margin-bottom:6px}
 .note{margin:0 0 8px;font-size:13px;color:var(--muted);min-height:1em}
+.trace-prev{display:grid;place-items:center;height:300px;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#fff;margin-bottom:10px}
+.trace-prev canvas{max-width:100%;max-height:100%}
+.trace-opts{gap:8px 16px}
 .png-prev{display:grid;place-items:center;height:280px;border:1px solid var(--line);border-radius:6px;overflow:hidden;
   background:repeating-conic-gradient(var(--btn) 0 25%,var(--panel) 0 50%) 0 0/16px 16px}
 .png-prev img{max-width:100%;max-height:100%;object-fit:contain}
@@ -194,6 +197,8 @@ label.opt{color:var(--ink);margin-bottom:6px}
       <hr>
       <button class="mi" id="flip-h" aria-pressed="false" title="Flip sketch and drawing horizontally">Flip all horizontally</button>
       <button class="mi" id="flip-v" aria-pressed="false" title="Flip sketch and drawing vertically">Flip all vertically</button>
+      <hr>
+      <button class="mi" id="sk-trace" disabled title="Turn the sketch's dark areas into editable shapes">Auto-trace sketch…</button>
       <hr>
       <button class="mi" id="clear-sketch" title="Remove the sketch image (your paths stay)" disabled>Remove sketch</button>
     </div></details>
@@ -315,6 +320,20 @@ label.opt{color:var(--ink);margin-bottom:6px}
   <ul class="docs-list" id="docs-list"></ul>
   <p class="note">Drawings are saved in this browser only. To keep a copy or move a drawing to another computer, use File › Save project file.</p>
   <div class="dlg-actions"><button id="docs-close">Close</button></div>
+</dialog>
+
+<dialog id="trace-dlg" aria-labelledby="trace-title">
+  <div class="dlg-head"><h2 id="trace-title">Auto-trace sketch</h2></div>
+  <div class="trace-prev"><canvas id="trace-canvas" aria-label="Preview of the areas that will be traced"></canvas></div>
+  <div class="opts trace-opts">
+    <label class="ctl" title="Pixels darker than this become shapes">Darkness cut-off <input type="range" id="tr-thr" min="1" max="254" value="128"> <span id="tr-thr-v" class="note"></span></label>
+    <button id="tr-auto" title="Pick a cut-off from the image">Auto</button>
+    <label class="ctl" title="Higher is smoother with fewer points; lower follows the sketch more closely">Smoothness <input type="range" id="tr-smooth" min="0.5" max="6" step="0.5" value="2"></label>
+    <label class="ctl">Ignore specks under <input type="number" id="tr-speck" min="0" max="100000" step="1" value="16" aria-label="Minimum area in pixels"> px²</label>
+    <label class="ctl">Color <input type="color" id="tr-color" value="#1a1a1a" aria-label="Color of traced shapes"></label>
+  </div>
+  <p class="note" id="trace-note">Black in the preview is what becomes shapes.</p>
+  <div class="dlg-actions"><button id="tr-go" class="primary">Trace</button><button id="tr-close">Cancel</button></div>
 </dialog>
 
 <dialog id="dlg" aria-labelledby="dlg-title">
@@ -1721,7 +1740,7 @@ function showSketch(sk) {
   sketch = sk;
   if (sk) { img.setAttribute('href', sk.url); if (!(skRect.w > 0)) skRect = { x: 0, y: 0, w: sk.w, h: sk.h }; }
   else { img.removeAttribute('href'); sketchSel = false; }
-  hasImage = !!sk; $('clear-sketch').disabled = !sk;
+  hasImage = !!sk; $('clear-sketch').disabled = !sk; $('sk-trace').disabled = !sk;
   applyFlip(); render();
 }
 function loadImage(file) {
@@ -2017,6 +2036,259 @@ function flipSel(axis) {
   const m = axis === 'h' ? q => ({ x: 2 * c.x - q.x, y: q.y }) : q => ({ x: q.x, y: 2 * c.y - q.y });
   transformSel(m, t => { Object.assign(t, m(t)); if (t.rot) t.rot = -t.rot; });
 }
+
+/* ---------- auto-trace ---------- */
+// 1) Draw the sketch (as shown: position, size, flip) into a canvas and threshold it.
+// 2) Follow the boundary between dark and light pixels into closed outlines (outer edges and holes).
+// 3) Find sharp corners, smooth the pixel staircase, and fit Bézier curves between corners.
+// 4) Add the outlines as filled shapes; outlines with holes become combined shapes; all in one group.
+const TR = { gray: null, w: 0, h: 0, sc: 1 };
+async function prepareTrace() {
+  const im = new Image();
+  await new Promise((res, rej) => { im.onload = res; im.onerror = rej; im.src = sketch.url; });
+  const sc = Math.min(1, 1600 / Math.max(skRect.w, skRect.h)), w = Math.max(1, Math.round(skRect.w * sc)), h = Math.max(1, Math.round(skRect.h * sc));
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+  ctx.save();
+  if (flip.h) { ctx.translate(w, 0); ctx.scale(-1, 1); }
+  if (flip.v) { ctx.translate(0, h); ctx.scale(1, -1); }
+  ctx.drawImage(im, 0, 0, w, h);
+  ctx.restore();
+  const d = ctx.getImageData(0, 0, w, h).data, gray = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) gray[i] = (d[i * 4] * 299 + d[i * 4 + 1] * 587 + d[i * 4 + 2] * 114) / 1000;
+  Object.assign(TR, { gray, w, h, sc });
+}
+// Otsu's method: the cut-off that best separates dark from light.
+function otsu(gray) {
+  const hist = new Array(256).fill(0); gray.forEach(v => hist[v]++);
+  const total = gray.length; let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sumB = 0, wB = 0, best = 0, thr = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t]; if (!wB) continue;
+    const wF = total - wB; if (!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB, mF = (sum - sumB) / wF, between = wB * wF * (mB - mF) ** 2;
+    if (between > best) { best = between; thr = t; }
+  }
+  return thr;
+}
+function tracePreview() {
+  const thr = +$('tr-thr').value, { gray, w, h } = TR, c = $('trace-canvas');
+  $('tr-thr-v').textContent = thr;
+  if (!gray) return;
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d'), out = ctx.createImageData(w, h);
+  for (let i = 0; i < w * h; i++) { const v = gray[i] < thr ? 0 : 255; out.data[i * 4] = out.data[i * 4 + 1] = out.data[i * 4 + 2] = v; out.data[i * 4 + 3] = 255; }
+  ctx.putImageData(out, 0, 0);
+}
+// Boundary edges run with dark pixels on their right, so outer edges go clockwise and holes the other way.
+function traceLoops(ink, w, h) {
+  const W = w + 1, out = new Uint8Array(W * (h + 1)), DX = [1, 0, -1, 0], DY = [0, 1, 0, -1];
+  const isInk = (x, y) => x >= 0 && y >= 0 && x < w && y < h && ink[y * w + x];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (!ink[y * w + x]) continue;
+    if (!isInk(x, y - 1)) out[y * W + x] |= 1;            // top: right-going
+    if (!isInk(x + 1, y)) out[y * W + x + 1] |= 2;        // right: down-going
+    if (!isInk(x, y + 1)) out[(y + 1) * W + x + 1] |= 4;  // bottom: left-going
+    if (!isInk(x - 1, y)) out[(y + 1) * W + x] |= 8;      // left: up-going
+  }
+  const loops = [];
+  for (let v = 0; v < out.length; v++) {
+    while (out[v]) {
+      const sx = v % W, sy = (v - sx) / W;
+      let d = Math.log2(out[v] & -out[v]), x = sx, y = sy;
+      const pts = [{ x: sx, y: sy }];
+      for (let guard = 0; guard < 4 * out.length; guard++) {
+        out[y * W + x] &= ~(1 << d);
+        x += DX[d]; y += DY[d];
+        if (x === sx && y === sy) break;
+        const m = out[y * W + x]; if (!m) break;
+        // At a pinch point, turn left: diagonal neighbours stay joined, which keeps thin strokes in one piece.
+        let nd = -1;
+        for (const c of [(d + 3) % 4, d, (d + 1) % 4]) if (m & (1 << c)) { nd = c; break; }
+        if (nd < 0) break;
+        if (nd !== d) pts.push({ x, y });
+        d = nd;
+      }
+      if (pts.length >= 2) loops.push(pts);
+    }
+  }
+  return loops;
+}
+const polyArea = P => { let a = 0; for (let i = 0; i < P.length; i++) { const p = P[i], q = P[(i + 1) % P.length]; a += p.x * q.y - q.x * p.y; } return a / 2; };
+function inPoly(pt, P) {
+  let c = false;
+  for (let i = 0, j = P.length - 1; i < P.length; j = i++) {
+    const a = P[i], b = P[j];
+    if ((a.y > pt.y) !== (b.y > pt.y) && pt.x < (b.x - a.x) * (pt.y - a.y) / (b.y - a.y) + a.x) c = !c;
+  }
+  return c;
+}
+// Corner points of an outline → points every pixel along it.
+function densify(P) {
+  const out = [];
+  for (let i = 0; i < P.length; i++) {
+    const a = P[i], b = P[(i + 1) % P.length], n = Math.max(Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+    for (let j = 0; j < n; j++) out.push({ x: a.x + (b.x - a.x) * j / n, y: a.y + (b.y - a.y) * j / n });
+  }
+  return out;
+}
+const vsub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y }), vadd = (a, b) => ({ x: a.x + b.x, y: a.y + b.y }), vmul = (a, k) => ({ x: a.x * k, y: a.y * k });
+const vdot = (a, b) => a.x * b.x + a.y * b.y, vlen = a => Math.hypot(a.x, a.y), vnorm = a => { const l = vlen(a) || 1; return { x: a.x / l, y: a.y / l }; };
+// Fit cubic Béziers to points (Philip Schneider's algorithm, Graphics Gems 1990).
+function fitCubic(P, tL, tR, err, out) {
+  if (P.length < 2) return;
+  const first = P[0], last = P[P.length - 1];
+  if (P.length === 2) { const d = vlen(vsub(last, first)) / 3; out.push([first, vadd(first, vmul(tL, d)), vadd(last, vmul(tR, d)), last]); return; }
+  let u = chordParams(P), bz = genBezier(P, u, tL, tR), [maxE, split] = maxErr(P, bz, u);
+  if (maxE < err * err) { out.push(bz); return; }
+  if (maxE < 16 * err * err) {
+    for (let it = 0; it < 6; it++) {
+      u = u.map((t, i) => newton(bz, P[i], t));
+      bz = genBezier(P, u, tL, tR); [maxE, split] = maxErr(P, bz, u);
+      if (maxE < err * err) { out.push(bz); return; }
+    }
+  }
+  const tC = vnorm(vsub(P[split - 1], P[split + 1]));
+  fitCubic(P.slice(0, split + 1), tL, tC, err, out);
+  fitCubic(P.slice(split), vmul(tC, -1), tR, err, out);
+}
+function chordParams(P) {
+  const u = [0];
+  for (let i = 1; i < P.length; i++) u.push(u[i - 1] + vlen(vsub(P[i], P[i - 1])));
+  const L = u[u.length - 1] || 1;
+  return u.map(v => v / L);
+}
+const bzPt = (b, t) => { const s = 1 - t; return { x: s * s * s * b[0].x + 3 * s * s * t * b[1].x + 3 * s * t * t * b[2].x + t * t * t * b[3].x, y: s * s * s * b[0].y + 3 * s * s * t * b[1].y + 3 * s * t * t * b[2].y + t * t * t * b[3].y }; };
+function genBezier(P, u, tL, tR) {
+  const first = P[0], last = P[P.length - 1];
+  let c00 = 0, c01 = 0, c11 = 0, x0 = 0, x1 = 0;
+  u.forEach((t, i) => {
+    const s = 1 - t, a1 = vmul(tL, 3 * s * s * t), a2 = vmul(tR, 3 * s * t * t);
+    c00 += vdot(a1, a1); c01 += vdot(a1, a2); c11 += vdot(a2, a2);
+    const tmp = vsub(P[i], vadd(vmul(first, s * s * s + 3 * s * s * t), vmul(last, 3 * s * t * t + t * t * t)));
+    x0 += vdot(a1, tmp); x1 += vdot(a2, tmp);
+  });
+  const det = c00 * c11 - c01 * c01, seg = vlen(vsub(last, first));
+  let aL = det ? (x0 * c11 - x1 * c01) / det : 0, aR = det ? (c00 * x1 - c01 * x0) / det : 0;
+  if (aL < seg * 1e-6 || aR < seg * 1e-6) aL = aR = seg / 3;   // degenerate: fall back to a simple guess
+  return [first, vadd(first, vmul(tL, aL)), vadd(last, vmul(tR, aR)), last];
+}
+function maxErr(P, b, u) {
+  let m = 0, split = Math.floor(P.length / 2);
+  for (let i = 1; i < P.length - 1; i++) { const d = vsub(bzPt(b, u[i]), P[i]), e = vdot(d, d); if (e >= m) { m = e; split = i; } }
+  return [m, split];
+}
+function newton(b, p, t) {
+  const s = 1 - t, q = bzPt(b, t);
+  const d1 = { x: 3 * (s * s * (b[1].x - b[0].x) + 2 * s * t * (b[2].x - b[1].x) + t * t * (b[3].x - b[2].x)), y: 3 * (s * s * (b[1].y - b[0].y) + 2 * s * t * (b[2].y - b[1].y) + t * t * (b[3].y - b[2].y)) };
+  const d2 = { x: 6 * (s * (b[2].x - 2 * b[1].x + b[0].x) + t * (b[3].x - 2 * b[2].x + b[1].x)), y: 6 * (s * (b[2].y - 2 * b[1].y + b[0].y) + t * (b[3].y - 2 * b[2].y + b[1].y)) };
+  const diff = vsub(q, p), den = vdot(d1, d1) + vdot(diff, d2);
+  const nt = den ? t - vdot(diff, d1) / den : t;
+  return Math.min(1, Math.max(0, nt));
+}
+// One outline → our nodes: smooth curves between detected corners.
+function outlineToNodes(P, err) {
+  let pts = densify(P);
+  const n = pts.length;
+  if (n < 8) return P.map(q => ({ x: q.x, y: q.y, hi: null, ho: null }));
+  // Corners: sharp turns measured over a few pixels (ignores the staircase of single pixels).
+  const K = 4, ang = pts.map((p, i) => {
+    const a = vsub(p, pts[(i - K + n) % n]), b = vsub(pts[(i + K) % n], p);
+    return Math.acos(Math.max(-1, Math.min(1, vdot(a, b) / ((vlen(a) * vlen(b)) || 1))));
+  });
+  const corners = [];
+  for (let i = 0; i < n; i++) {
+    if (ang[i] < 1.0) continue;   // about 57°
+    let peak = true;
+    // Keep only the sharpest point nearby (the first one, if several are equally sharp).
+    for (let j = 1; j <= K && peak; j++) if (ang[(i + j) % n] > ang[i] || ang[(i - j + n) % n] >= ang[i]) peak = false;
+    if (peak) corners.push(i);
+  }
+  // Smooth the staircase, keeping corners where they are.
+  const isC = new Uint8Array(n); corners.forEach(i => { isC[i] = 1; });
+  for (let pass = 0; pass < 2; pass++) pts = pts.map((p, i) => isC[i] ? p : {
+    x: (pts[(i - 1 + n) % n].x + 2 * p.x + pts[(i + 1) % n].x) / 4, y: (pts[(i - 1 + n) % n].y + 2 * p.y + pts[(i + 1) % n].y) / 4 });
+  const beziers = [], cornerAt = new Set();
+  const look = (arr, i, dir) => arr[Math.max(0, Math.min(arr.length - 1, i + dir * Math.min(3, arr.length - 1)))];
+  if (!corners.length) {
+    const run = [...pts, pts[0]], t = vnorm(vsub(pts[1], pts[n - 1]));
+    fitCubic(run, t, vmul(t, -1), err, beziers);
+  } else {
+    for (let c = 0; c < corners.length; c++) {
+      const a = corners[c], b = corners[(c + 1) % corners.length];
+      const run = []; for (let i = a; ; i = (i + 1) % n) { run.push(pts[i]); if (i === b && run.length > 1) break; }
+      cornerAt.add(beziers.length);
+      fitCubic(run, vnorm(vsub(look(run, 0, 1), run[0])), vnorm(vsub(look(run, run.length - 1, -1), run[run.length - 1])), err, beziers);
+    }
+  }
+  return beziers.map((bz, i) => {
+    const prev = beziers[(i - 1 + beziers.length) % beziers.length];
+    const nd = { x: bz[0].x, y: bz[0].y, hi: { ...prev[2] }, ho: { ...bz[1] } };
+    if (cornerAt.has(i)) nd.corner = true;
+    return nd;
+  });
+}
+function runTrace() {
+  const { gray, w, h, sc } = TR; if (!gray) return;
+  const thr = +$('tr-thr').value, err = +$('tr-smooth').value, minArea = Math.max(0, +$('tr-speck').value || 0) * sc * sc;
+  const ink = new Uint8Array(w * h); for (let i = 0; i < w * h; i++) ink[i] = gray[i] < thr ? 1 : 0;
+  const loops = traceLoops(ink, w, h).map(P => ({ P, a: polyArea(P) })).filter(L => Math.abs(L.a) >= Math.max(1, minArea));
+  const outers = loops.filter(L => L.a > 0), holes = loops.filter(L => L.a < 0);
+  if (!outers.length) { $('trace-note').textContent = 'Nothing dark enough to trace. Raise the darkness cut-off.'; return false; }
+  if (outers.length > 3000 && !confirm(`This makes ${outers.length} shapes, which may be slow to edit. Continue? (Tip: ignore bigger specks or lower the cut-off.)`)) return false;
+  // Each hole belongs to the smallest outline around it.
+  const bbox = P => P.reduce((b, q) => ({ x0: Math.min(b.x0, q.x), y0: Math.min(b.y0, q.y), x1: Math.max(b.x1, q.x), y1: Math.max(b.y1, q.y) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
+  outers.forEach(o => { o.box = bbox(o.P); o.holes = []; });
+  holes.forEach(hl => {
+    const q = { x: hl.P[0].x + 0.5, y: hl.P[0].y + 0.5 };
+    let best = null;
+    for (const o of outers) if (q.x >= o.box.x0 && q.x <= o.box.x1 && q.y >= o.box.y0 && q.y <= o.box.y1 && o.a > -hl.a && (!best || o.a < best.a) && inPoly(q, o.P)) best = o;
+    if (best) best.holes.push(hl);
+  });
+  // Round to 1/100 px: plenty precise, and keeps saved drawings small.
+  const toDocPt = q => q && { x: f(skRect.x + q.x / sc), y: f(skRect.y + q.y / sc) };
+  const mkPath = P => ({ nodes: outlineToNodes(P, err).map(nd => ({ ...nd, ...toDocPt(nd), hi: toDocPt(nd.hi), ho: toDocPt(nd.ho) })), closed: true,
+    fill: $('tr-color').value, stroke: style.color, sw: 0, kind: 'trace' });
+  snap();
+  let z = nextZ(), id = newId();
+  const gid = id++, added = [];
+  outers.forEach(o => {
+    const cp = o.holes.length ? id++ : undefined;
+    [o, ...o.holes].forEach(L => {
+      const p = mkPath(L.P); p.z = z++; p.g = gid;
+      if (cp !== undefined) { p.cp = cp; p.fr = 'evenodd'; }
+      paths.push(p); added.push(paths.length - 1);
+    });
+  });
+  normStructure();
+  if (tool !== 'edit') setTool('edit');
+  setSelection(added, []); render(); save();
+  return true;
+}
+async function openTrace() {
+  if (!sketch) return;
+  closeMenus();
+  $('trace-note').textContent = 'Black in the preview is what becomes shapes.';
+  $('trace-dlg').showModal();
+  try {
+    await prepareTrace();
+    $('tr-thr').value = style.traceThr || otsu(TR.gray);
+    tracePreview();
+  } catch (e) { $('trace-note').textContent = 'Couldn’t read the sketch image.'; }
+}
+$('sk-trace').onclick = openTrace;
+$('tr-thr').oninput = () => { style.traceThr = +$('tr-thr').value; tracePreview(); };
+$('tr-auto').onclick = () => { if (TR.gray) { $('tr-thr').value = otsu(TR.gray); delete style.traceThr; tracePreview(); } };
+$('tr-close').onclick = () => $('trace-dlg').close();
+$('tr-go').onclick = () => {
+  $('trace-note').textContent = 'Tracing…';
+  setTimeout(() => {
+    try { if (runTrace()) $('trace-dlg').close(); }
+    catch (e) { $('trace-note').textContent = 'Tracing failed: ' + e.message; }
+  }, 30);
+};
 
 /* ---------- locking ---------- */
 function setLocked(refs, on) {
@@ -2337,7 +2609,7 @@ const PICTURE = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" str
 const FOLDER = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M1.5 4.5v8h13v-7H7.5l-1.5-1.5h-4.5z"/></svg>';
 function layerName(it) {
   if (it.k === 't') return `“${it.ref.text.split('\n')[0]}${it.ref.text.includes('\n') ? ' …' : ''}”`;
-  const p = it.ref, names = { circle: 'Circle', rect: 'Rectangle', polygon: 'Polygon', star: 'Star', line: 'Line' };
+  const p = it.ref, names = { circle: 'Circle', rect: 'Rectangle', polygon: 'Polygon', star: 'Star', line: 'Line', trace: 'Traced shape' };
   const base = names[p.kind] || (p.closed ? 'Shape' : 'Path');
   return `${base} ${it.i + 1}`;
 }
