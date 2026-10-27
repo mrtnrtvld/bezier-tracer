@@ -60,7 +60,7 @@ input[type=color]{width:32px;height:28px;padding:0;border:1px solid var(--line);
 .menu-pop .sc{color:var(--muted);font-size:12px}
 .menu-pop hr{border:none;border-top:1px solid var(--line);margin:4px 2px}
 .menu-pop .mrow{display:flex;gap:4px;padding:4px 6px;flex-wrap:wrap}
-.menu-pop .mrow button{padding:4px 8px}
+.menu-pop .mrow button{padding:4px 7px;display:grid;place-items:center}
 .menu-pop .mi[aria-pressed="true"]::after{content:"✓";color:var(--accent)}
 .menu-pop label.mi.ctl{cursor:default;align-items:center}
 .menu-pop .mlabel{font-size:12px;color:var(--muted);padding:4px 10px 0}
@@ -162,6 +162,11 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
       <hr>
       <button class="mi" id="o-group">Group <span class="sc">⌘G</span></button>
       <button class="mi" id="o-ungroup">Ungroup <span class="sc">⇧⌘G</span></button>
+      <hr>
+      <div class="mlabel">Align (to each other, or to the canvas for one item)</div>
+      <div class="mrow"><button id="a-l" title="Align left (Alt+A)" aria-label="Align left (Alt+A)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M2 1.5v13" fill="none"/><rect x="3.5" y="3.5" width="9" height="3" stroke="none"/><rect x="3.5" y="9.5" width="5" height="3" stroke="none"/></svg></button><button id="a-hc" title="Align centers horizontally (Alt+H)" aria-label="Align centers horizontally (Alt+H)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M8 1.5v13" fill="none"/><rect x="3" y="3.5" width="10" height="3" stroke="none"/><rect x="5" y="9.5" width="6" height="3" stroke="none"/></svg></button><button id="a-r" title="Align right (Alt+D)" aria-label="Align right (Alt+D)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M14 1.5v13" fill="none"/><rect x="3.5" y="3.5" width="9" height="3" stroke="none"/><rect x="7.5" y="9.5" width="5" height="3" stroke="none"/></svg></button><button id="a-t" title="Align top (Alt+W)" aria-label="Align top (Alt+W)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M1.5 2h13" fill="none"/><rect x="3.5" y="3.5" width="3" height="9" stroke="none"/><rect x="9.5" y="3.5" width="3" height="5" stroke="none"/></svg></button><button id="a-vc" title="Align middles vertically (Alt+V)" aria-label="Align middles vertically (Alt+V)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M1.5 8h13" fill="none"/><rect x="3.5" y="3" width="3" height="10" stroke="none"/><rect x="9.5" y="5" width="3" height="6" stroke="none"/></svg></button><button id="a-b" title="Align bottom (Alt+S)" aria-label="Align bottom (Alt+S)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M1.5 14h13" fill="none"/><rect x="3.5" y="3.5" width="3" height="9" stroke="none"/><rect x="9.5" y="7.5" width="3" height="5" stroke="none"/></svg></button></div>
+      <div class="mlabel">Distribute (even gaps, 3 or more items)</div>
+      <div class="mrow"><button id="d-h" title="Distribute horizontally (Alt+Shift+H)" aria-label="Distribute horizontally (Alt+Shift+H)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M1.5 1.5v13M14.5 1.5v13" fill="none"/><rect x="6.5" y="4" width="3" height="8" stroke="none"/></svg></button><button id="d-v" title="Distribute vertically (Alt+Shift+V)" aria-label="Distribute vertically (Alt+Shift+V)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M1.5 1.5h13M1.5 14.5h13" fill="none"/><rect x="4" y="6.5" width="8" height="3" stroke="none"/></svg></button></div>
       <hr>
       <button class="mi" id="o-rot-r">Rotate 90° right</button>
       <button class="mi" id="o-rot-l">Rotate 90° left</button>
@@ -268,7 +273,8 @@ let undoStack = [], redoStack = [];
 
 const f = v => Math.round(v * 100) / 100;
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-const state = () => JSON.stringify({ paths, texts, cur, flip, doc });
+// Undo steps also remember the selection, so undo/redo put it back the way it was.
+const state = () => JSON.stringify({ paths, texts, cur, flip, doc, s: { p: sel.p, n: sel.n, extra, selT, extraT } });
 const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 function pushUndo(s) { undoStack.push(s); if (undoStack.length > 200) undoStack.shift(); redoStack = []; }
@@ -279,7 +285,14 @@ function restore(s) {
   if (o.doc && (o.doc.w !== doc.w || o.doc.h !== doc.h)) { setDoc(o.doc.w, o.doc.h); fit(); }
   extra = [];
   if (cur !== null && (!paths[cur] || paths[cur].closed)) cur = null;
-  sel = { p: cur ?? -1, n: -1 }; render(); save();
+  sel = { p: cur ?? -1, n: -1 };
+  if (o.s && cur === null) {
+    const okP = i => paths[i] && !paths[i].hidden, okT = i => texts[i] && !texts[i].hidden;
+    sel = { p: okP(o.s.p) ? o.s.p : -1, n: okP(o.s.p) && paths[o.s.p].nodes[o.s.n] ? o.s.n : -1 };
+    extra = (o.s.extra || []).filter(okP); selT = okT(o.s.selT) ? o.s.selT : -1; extraT = (o.s.extraT || []).filter(okT);
+    if (sel.p < 0 && extra.length) sel.p = extra.shift();
+  }
+  render(); save();
 }
 function undo() { if (!undoStack.length) return; redoStack.push(state()); restore(undoStack.pop()); }
 function redo() { if (!redoStack.length) return; undoStack.push(state()); restore(redoStack.pop()); }
@@ -1273,6 +1286,11 @@ window.addEventListener('keydown', e => {
   if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSel(); return; }
   if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); return; }
   if (mod) return;
+  if (e.altKey) {
+    const A = { KeyA: 'l', KeyH: 'hc', KeyD: 'r', KeyW: 't', KeyV: 'vc', KeyS: 'b' }[e.code];
+    if (e.shiftKey && (e.code === 'KeyH' || e.code === 'KeyV')) { e.preventDefault(); distributeSel(e.code === 'KeyH' ? 'h' : 'v'); return; }
+    if (A) { e.preventDefault(); alignSel(A); return; }
+  }
   if (e.code === 'Space' && !spaceDown) { spaceDown = true; document.body.classList.add('panning'); e.preventDefault(); return; }
   switch (e.key) {
     case 'Escape': case 'Enter':
@@ -1602,6 +1620,58 @@ function flipSel(axis) {
   const c = selCenter(); if (!c) return;
   const m = axis === 'h' ? q => ({ x: 2 * c.x - q.x, y: q.y }) : q => ({ x: q.x, y: 2 * c.y - q.y });
   transformSel(m, t => { Object.assign(t, m(t)); if (t.rot) t.rot = -t.rot; });
+}
+
+/* ---------- align and distribute ---------- */
+// Units move as a whole: a group, a combined shape, or a single item.
+function selUnits() {
+  const map = new Map(), units = [];
+  selectedRefs().forEach(r => {
+    const k = r.g != null ? 'g' + r.g : r.cp != null ? 'c' + r.cp : null;
+    if (k == null) units.push([r]);
+    else { if (!map.has(k)) { map.set(k, []); units.push(map.get(k)); } map.get(k).push(r); }
+  });
+  return units;
+}
+function refsBox(refs) {
+  const ps = refs.map(r => paths.indexOf(r)).filter(i => i >= 0 && !paths[i].hidden);
+  let b = ps.length ? boundsOf(ps) : null;
+  refs.map(r => texts.indexOf(r)).filter(i => i >= 0).forEach(i => {
+    const r = textBox(i); if (!r) return;
+    const t = { x0: r.x, y0: r.y, x1: r.x + r.width, y1: r.y + r.height };
+    b = b ? { x0: Math.min(b.x0, t.x0), y0: Math.min(b.y0, t.y0), x1: Math.max(b.x1, t.x1), y1: Math.max(b.y1, t.y1) } : t;
+  });
+  return b;
+}
+function moveRefs(refs, dx, dy) {
+  const mv = q => { if (q) { q.x += dx; q.y += dy; } };
+  refs.forEach(r => { if (r.nodes) r.nodes.forEach(n => { mv(n); mv(n.hi); mv(n.ho); }); else mv(r); });
+}
+function alignSel(mode) {
+  const units = selUnits().map(u => ({ u, b: refsBox(u) })).filter(x => x.b);
+  if (!units.length) return;
+  const T = units.length === 1 ? { x0: 0, y0: 0, x1: doc.w, y1: doc.h }
+    : units.reduce((a, { b }) => ({ x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
+  commitText(); snap();
+  units.forEach(({ u, b }) => {
+    const dx = mode === 'l' ? T.x0 - b.x0 : mode === 'r' ? T.x1 - b.x1 : mode === 'hc' ? (T.x0 + T.x1 - b.x0 - b.x1) / 2 : 0;
+    const dy = mode === 't' ? T.y0 - b.y0 : mode === 'b' ? T.y1 - b.y1 : mode === 'vc' ? (T.y0 + T.y1 - b.y0 - b.y1) / 2 : 0;
+    moveRefs(u, dx, dy);
+  });
+  render(); save();
+}
+// Space units so the gaps between them are equal, keeping the first and last in place.
+function distributeSel(axis) {
+  const units = selUnits().map(u => ({ u, b: refsBox(u) })).filter(x => x.b);
+  if (units.length < 3) return;
+  const lo = axis === 'h' ? 'x0' : 'y0', hi = axis === 'h' ? 'x1' : 'y1';
+  units.sort((a, c) => (a.b[lo] + a.b[hi]) - (c.b[lo] + c.b[hi]));
+  const span = units[units.length - 1].b[hi] - units[0].b[lo];
+  const gap = (span - units.reduce((sum, x) => sum + x.b[hi] - x.b[lo], 0)) / (units.length - 1);
+  commitText(); snap();
+  let at = units[0].b[lo];
+  units.forEach(({ u, b }) => { const d = at - b[lo]; moveRefs(u, axis === 'h' ? d : 0, axis === 'h' ? 0 : d); at += b[hi] - b[lo] + gap; });
+  render(); save();
 }
 
 /* ---------- clipboard ---------- */
@@ -1940,6 +2010,9 @@ $('o-cut').onclick = () => { if (copySel()) deleteSelected(); };
 // The menu can't read the system clipboard without a permission prompt, so it pastes the last copy from this tab.
 $('o-paste').onclick = () => { if (clip) pasteClip(clip); };
 $('o-dup').onclick = duplicateSel;
+for (const m of ['l', 'hc', 'r', 't', 'vc', 'b']) $('a-' + m).onclick = () => alignSel(m);
+$('d-h').onclick = () => distributeSel('h');
+$('d-v').onclick = () => distributeSel('v');
 $('o-rot-r').onclick = () => rotateSel(90);
 $('o-rot-l').onclick = () => rotateSel(-90);
 $('o-flip-h').onclick = () => flipSel('h');
