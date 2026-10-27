@@ -109,6 +109,9 @@ body[data-tool="text"] .label{pointer-events:auto;cursor:text}
 .layer .eye svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .sw{width:16px;height:16px;border-radius:3px;flex:none;display:grid;place-items:center;font-weight:600;font-size:12px;line-height:1;box-sizing:border-box}
 .lname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.layer.grp .lname{font-weight:600}
+.layer.indent{padding-left:20px}
+.layer .sw svg{display:block}
 .layers-none{color:var(--muted);padding:10px;font-size:13px}
 .layers-foot{display:flex;gap:4px;padding:6px;border-top:1px solid var(--line)}
 .layers-foot button{flex:1;padding:4px 0}
@@ -148,6 +151,13 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
       <button class="mi" id="flip-v" aria-pressed="false" title="Flip sketch and drawing vertically">Flip all vertically</button>
       <hr>
       <button class="mi" id="clear-sketch" title="Remove the sketch image (your paths stay)" disabled>Remove sketch</button>
+    </div></details>
+    <details class="menu" id="m-object"><summary>Object</summary><div class="menu-pop" id="object-pop">
+      <button class="mi" id="o-group">Group <span class="sc">⌘G</span></button>
+      <button class="mi" id="o-ungroup">Ungroup <span class="sc">⇧⌘G</span></button>
+      <hr>
+      <button class="mi" id="o-combine" title="Draw the selected paths as one shape, so shapes inside others cut holes">Combine shapes (cut holes)</button>
+      <button class="mi" id="o-release" title="Split a combined shape back into separate paths">Release combined shape</button>
     </div></details>
   </div>
   <div class="group">
@@ -227,7 +237,7 @@ const svg = $('svg'), world = $('world'), board = $('board'), img = $('img');
 const pathsG = $('paths'), overlayG = $('overlay'), stage = $('stage');
 
 let doc = { w: 1000, h: 750 };
-let paths = [];            // [{closed, fill, nodes:[{x,y,hi,ho,corner}]}]  fill: color string or null
+let paths = [];            // [{closed, fill, stroke, sw, z, g, cp, fr, nodes:[{x,y,hi,ho,corner}]}]  fill: color or null; g: group id; cp: combined-shape id
 let cur = null;            // index of path being drawn with the pen
 let sel = { p: -1, n: -1 };
 let tool = 'pen';
@@ -250,7 +260,7 @@ const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&
 function pushUndo(s) { undoStack.push(s); if (undoStack.length > 200) undoStack.shift(); redoStack = []; }
 function snap() { pushUndo(state()); }
 function restore(s) {
-  const o = JSON.parse(s); paths = o.paths; texts = o.texts || []; cur = o.cur; selT = -1; extraT = []; normZ(); normStroke();
+  const o = JSON.parse(s); paths = o.paths; texts = o.texts || []; cur = o.cur; selT = -1; extraT = []; normZ(); normStroke(); normStructure();
   if (o.flip) { flip = o.flip; applyFlip(); }
   if (o.doc && (o.doc.w !== doc.w || o.doc.h !== doc.h)) { setDoc(o.doc.w, o.doc.h); fit(); }
   extra = [];
@@ -268,7 +278,7 @@ function load() {
     const o = JSON.parse(localStorage.getItem('bezier-tracer-v1') || 'null');
     if (o) { paths = o.paths || []; texts = o.texts || []; doc = o.doc || doc; style = { ...style, ...o.style }; }
   } catch (e) {}
-  normZ(); normStroke();
+  normZ(); normStroke(); normStructure();
   $('color').value = style.color; $('width').value = style.width;
 }
 // Each path has its own stroke color and width. Paths saved before that existed take the old shared stroke.
@@ -291,23 +301,126 @@ function layerItems() {
     .sort((a, b) => a.ref.z - b.ref.z);
 }
 const isSelected = it => it.k === 'p' ? selectedPaths().includes(it.i) : selectedTexts().includes(it.i);
+
+/* ---------- groups and combined shapes ---------- */
+// An item can belong to one group (g): grouped items select, move and scale together.
+// Paths can also be combined (cp): they're drawn as one path, so inner shapes cut holes.
+// Members of a group or combined shape always sit next to each other in the stacking order.
+const allIds = () => [...paths.map(p => p.g), ...paths.map(p => p.cp), ...texts.map(t => t.g)].filter(v => v != null);
+const newId = () => Math.max(0, ...allIds()) + 1;
+// Grow a selection to whole groups and combined shapes.
+function expandSel(ps, ts) {
+  const P = new Set(ps), Tt = new Set(ts), gs = new Set(), cps = new Set();
+  ps.forEach(i => { const p = paths[i]; if (!p) return; if (p.g != null) gs.add(p.g); if (p.cp != null) cps.add(p.cp); });
+  ts.forEach(i => { if (texts[i] && texts[i].g != null) gs.add(texts[i].g); });
+  paths.forEach((p, i) => { if ((p.g != null && gs.has(p.g)) || (p.cp != null && cps.has(p.cp))) P.add(i); });
+  texts.forEach((t, i) => { if (t.g != null && gs.has(t.g)) Tt.add(i); });
+  return [[...P], [...Tt]];
+}
+// Shift-click: add the whole unit, or remove it if it's all selected already.
+function toggleUnit(ups, uts) {
+  const P = selectedPaths(), Tt = selectedTexts();
+  const on = ups.every(i => P.includes(i)) && uts.every(i => Tt.includes(i));
+  if (on) setSelection(P.filter(i => !ups.includes(i)), Tt.filter(i => !uts.includes(i)));
+  else setSelection([...new Set([...P, ...ups])], [...new Set([...Tt, ...uts])]);
+}
+// Split back-to-front refs into units: groups (top level only), combined shapes, or single items.
+function buildUnits(refs, level) {
+  const units = [], map = {};
+  refs.forEach(r => {
+    const k = level === 'top' && r.g != null ? 'g' + r.g : r.cp != null ? 'c' + r.cp : null;
+    if (k == null) units.push([r]); else if (map[k]) map[k].push(r); else { map[k] = [r]; units.push(map[k]); }
+  });
+  return units;
+}
+// Tidy up after any change: drop groups with one unit and combined shapes with one path,
+// keep members together, and renumber the stacking order.
+function normStructure() {
+  const cpCount = {};
+  paths.forEach(p => { if (p.cp != null) cpCount[p.cp] = (cpCount[p.cp] || 0) + 1; });
+  paths.forEach(p => { if (p.cp != null && cpCount[p.cp] < 2) { delete p.cp; delete p.fr; } });
+  // A combined shape lives in the group of its bottom path.
+  const cpGroup = {};
+  [...paths].sort((a, b) => a.z - b.z).forEach(p => { if (p.cp != null && !(p.cp in cpGroup)) cpGroup[p.cp] = p.g; });
+  paths.forEach(p => { if (p.cp != null) { if (cpGroup[p.cp] == null) delete p.g; else p.g = cpGroup[p.cp]; } });
+  const units = {};
+  paths.forEach((p, i) => { if (p.g != null) (units[p.g] ||= new Set()).add(p.cp != null ? 'c' + p.cp : 'p' + i); });
+  texts.forEach((t, i) => { if (t.g != null) (units[t.g] ||= new Set()).add('t' + i); });
+  [...paths, ...texts].forEach(r => { if (r.g != null && units[r.g].size < 2) delete r.g; });
+  const gather = (arr, key) => {
+    const last = {}, buckets = {};
+    arr.forEach((r, j) => { const k = key(r); if (k) { last[k] = j; (buckets[k] ||= []).push(r); } });
+    const out = [];
+    arr.forEach((r, j) => { const k = key(r); if (!k) out.push(r); else if (last[k] === j) out.push(...buckets[k]); });
+    return out;
+  };
+  let list = layerItems().map(x => x.ref);
+  list = gather(list, r => r.cp != null ? 'c' + r.cp : null);
+  list = gather(list, r => r.g != null ? 'g' + r.g : null);
+  list.forEach((r, j) => { r.z = j; });
+}
+function selectedRefs() { return [...selectedPaths().map(i => paths[i]), ...selectedTexts().map(i => texts[i])]; }
+function selectRefs(refs) {
+  setSelection(refs.map(r => paths.indexOf(r)).filter(i => i >= 0), refs.map(r => texts.indexOf(r)).filter(i => i >= 0));
+}
+function groupSel() {
+  const [ps, ts] = expandSel(selectedPaths(), selectedTexts());
+  if (ps.length + ts.length < 2) return;
+  snap();
+  const id = newId();
+  ps.forEach(i => { paths[i].g = id; }); ts.forEach(i => { texts[i].g = id; });
+  const refs = [...ps.map(i => paths[i]), ...ts.map(i => texts[i])];
+  normStructure(); selectRefs(refs); render(); save();
+}
+function ungroupSel() {
+  const refs = selectedRefs().filter(r => r.g != null);
+  if (!refs.length) return;
+  snap();
+  const keep = selectedRefs();
+  const gs = new Set(refs.map(r => r.g));
+  [...paths, ...texts].forEach(r => { if (gs.has(r.g)) delete r.g; });
+  normStructure(); selectRefs(keep); render(); save();
+}
+const STYLE_KEYS = ['fill', 'stroke', 'sw'];
+function combineSel() {
+  const [ps] = expandSel(selectedPaths(), []);
+  if (ps.length < 2) return;
+  snap();
+  const refs = ps.map(i => paths[i]).sort((a, b) => a.z - b.z), bottom = refs[0], id = newId();
+  // A combined shape takes the look of its bottom path.
+  refs.forEach(r => { r.cp = id; r.fr = 'evenodd'; STYLE_KEYS.forEach(k => { r[k] = bottom[k]; }); });
+  normStructure(); selectRefs(refs); render(); save();
+}
+function releaseSel() {
+  const refs = selectedRefs().filter(r => r.cp != null);
+  if (!refs.length) return;
+  snap();
+  const keep = selectedRefs(), cps = new Set(refs.map(r => r.cp));
+  paths.forEach(p => { if (cps.has(p.cp)) { delete p.cp; delete p.fr; } });
+  normStructure(); selectRefs(keep); render(); save();
+}
+// Reorder units: whole selected units move at the top level; a partly selected group rearranges its insides.
+function reorderUnits(units, isSel, mode) {
+  if (!units.some(isSel)) return units;
+  if (mode === 'front') return [...units.filter(u => !isSel(u)), ...units.filter(isSel)];
+  if (mode === 'back') return [...units.filter(isSel), ...units.filter(u => !isSel(u))];
+  const out = units.slice(), s = out.map(isSel);
+  const swap = j => { [out[j], out[j + 1]] = [out[j + 1], out[j]]; [s[j], s[j + 1]] = [s[j + 1], s[j]]; };
+  if (mode === 'up') { for (let j = out.length - 2; j >= 0; j--) if (s[j] && !s[j + 1]) swap(j); }
+  else { for (let j = 1; j < out.length; j++) if (s[j] && !s[j - 1]) swap(j - 1); }
+  return out;
+}
 function arrange(mode) {
   commitText();
-  const list = layerItems(), on = list.map(isSelected);
-  if (!on.some(Boolean)) return;
+  normStructure();
+  const selSet = new Set(selectedRefs());
+  if (!selSet.size) return;
   snap();
-  let out;
-  if (mode === 'front') out = [...list.filter((_, j) => !on[j]), ...list.filter((_, j) => on[j])];
-  else if (mode === 'back') out = [...list.filter((_, j) => on[j]), ...list.filter((_, j) => !on[j])];
-  else {
-    // Step each selected item past its neighbor, keeping selected groups together.
-    out = list.slice(); const s = on.slice();
-    const swap = j => { [out[j], out[j + 1]] = [out[j + 1], out[j]]; [s[j], s[j + 1]] = [s[j + 1], s[j]]; };
-    if (mode === 'up') { for (let j = out.length - 2; j >= 0; j--) if (s[j] && !s[j + 1]) swap(j); }
-    else { for (let j = 1; j < out.length; j++) if (s[j] && !s[j - 1]) swap(j - 1); }
-  }
-  out.forEach((it, j) => { it.ref.z = j; });
-  render(); save();
+  const full = u => u.every(r => selSet.has(r)), any = u => u.some(r => selSet.has(r));
+  const top = reorderUnits(buildUnits(layerItems().map(x => x.ref), 'top'), full, mode)
+    .map(u => (u[0].g != null && any(u) && !full(u)) ? reorderUnits(buildUnits(u, 'inner'), full, mode).flat() : u);
+  top.flat().forEach((r, j) => { r.z = j; });
+  normStructure(); render(); save();
 }
 const newFill = () => style.fillOn ? style.fill : null;
 // Show the selected path's fill in the toolbar, or the default for new paths when nothing is selected.
@@ -332,6 +445,7 @@ function seg(a, b) {
   const c1 = a.ho || a, c2 = b.hi || b;
   return `C${f(c1.x)} ${f(c1.y)} ${f(c2.x)} ${f(c2.y)} ${f(b.x)} ${f(b.y)}`;
 }
+const combinedD = cp => paths.filter(q => q.cp === cp && !q.hidden).sort((a, b) => a.z - b.z).map(pathD).join('');
 function pathD(p) {
   const n = p.nodes; if (!n.length) return '';
   let d = `M${f(n[0].x)} ${f(n[0].y)}`;
@@ -485,12 +599,20 @@ function applyFlip() {
 function render() {
   const k = view.k, r = 4.5 / k, hr = 3.5 / k, lw = 1 / k;
   let s = '';
+  const doneCp = new Set();
   layerItems().forEach(({ k: kind, i, ref }) => {
     if (ref.hidden) return;
     if (kind === 'p') {
-      const p = ref, d = pathD(p);
-      s += `<path class="trace" d="${d}" fill="${p.fill || 'none'}" stroke="${p.stroke}" stroke-width="${p.sw}"/>`;
-      s += `<path class="hit${p.fill ? ' filled' : ''}" data-p="${i}" d="${d}" fill="${p.fill ? 'transparent' : 'none'}" stroke-width="${14 / k}"/>`;
+      const p = ref;
+      let d, fr = '';
+      // A combined shape is drawn once, at its bottom path, with the bottom path's look.
+      if (p.cp != null) {
+        if (doneCp.has(p.cp)) return;
+        doneCp.add(p.cp);
+        d = combinedD(p.cp); fr = ` fill-rule="${p.fr || 'evenodd'}"`;
+      } else d = pathD(p);
+      s += `<path class="trace" d="${d}"${fr} fill="${p.fill || 'none'}" stroke="${p.stroke}" stroke-width="${p.sw}"/>`;
+      s += `<path class="hit${p.fill ? ' filled' : ''}" data-p="${i}" d="${d}"${fr} fill="${p.fill ? 'transparent' : 'none'}" stroke-width="${14 / k}"/>`;
     } else {
       const t = ref;
       if (editT && editT.i === i) return; // hidden while its editor is open
@@ -579,7 +701,7 @@ function render() {
 /* ---------- tools ---------- */
 const hints = {
   pen: 'Click to place a corner point; click and drag to pull out curve handles. Click the first point to close the shape. <kbd>Enter</kbd> or <kbd>Esc</kbd> finishes the path. Click on an existing path to add a point to it, or click an open path’s end to keep drawing it.',
-  edit: 'Drag a shape or text to move it. Drag on empty space to select everything the box touches (<kbd>Shift</kbd> adds), or press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>A</kbd> for everything; drag a corner of the selection box to scale. Drag points or handles to reshape. <kbd>]</kbd> / <kbd>[</kbd> bring forward / send backward (add <kbd>Shift</kbd> for front / back); <kbd>L</kbd> shows layers. <kbd>Alt</kbd>-drag a handle to turn a smooth point into a corner. Double-click a point to toggle smooth/corner, or double-click a path to add a point. <kbd>Delete</kbd> removes the selected point, or the whole path if only the path is selected. Arrow keys nudge the selection 1 px, <kbd>Shift</kbd>+arrows 10 px. <kbd>Shift</kbd>-click to add or remove items. When scaling, <kbd>Shift</kbd> stretches freely and <kbd>Alt</kbd> scales from the center.',
+  edit: 'Drag a shape or text to move it. Drag on empty space to select everything the box touches (<kbd>Shift</kbd> adds), or press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>A</kbd> for everything; drag a corner of the selection box to scale. <kbd>⌘</kbd>+<kbd>G</kbd> groups the selection; the Object menu also combines shapes so inner ones cut holes. Drag points or handles to reshape. <kbd>]</kbd> / <kbd>[</kbd> bring forward / send backward (add <kbd>Shift</kbd> for front / back); <kbd>L</kbd> shows layers. <kbd>Alt</kbd>-drag a handle to turn a smooth point into a corner. Double-click a point to toggle smooth/corner, or double-click a path to add a point. <kbd>Delete</kbd> removes the selected point, or the whole path if only the path is selected. Arrow keys nudge the selection 1 px, <kbd>Shift</kbd>+arrows 10 px. <kbd>Shift</kbd>-click to add or remove items. When scaling, <kbd>Shift</kbd> stretches freely and <kbd>Alt</kbd> scales from the center.',
   rect: 'Drag from corner to corner to draw a rectangle. Hold <kbd>Shift</kbd> for a square, <kbd>Alt</kbd> to draw from the center. It’s a regular path, so you can reshape it in Edit mode.',
   circle: 'Drag from the center outward to draw a circle. It’s a regular Bézier path, so you can reshape it in Edit mode.',
   text: 'Click to add text, or click existing text to change it. <kbd>Enter</kbd> places it, <kbd>Esc</kbd> cancels. The color comes from Fill and the size from Size. In Edit mode, drag text to move it and double-click to retype it.',
@@ -632,7 +754,7 @@ function deleteSelected() {
   } else if (p) { selectedPaths().sort((a, b) => b - a).forEach(removePath); extra = []; }
   ts.sort((a, b) => b - a).forEach(i => texts.splice(i, 1));
   selT = -1; extraT = [];
-  render(); save();
+  normStructure(); render(); save();
 }
 function toggleCorner(p, i) {
   const n = p.nodes[i];
@@ -822,14 +944,10 @@ function editDown(pt, e) {
   }
   const ti = hitText(e);
   if (ti >= 0) {
-    const ts = selectedTexts();
-    if (e.shiftKey) {
-      const next = ts.includes(ti) ? ts.filter(j => j !== ti) : [...ts, ti];
-      selT = next.length ? next[0] : -1; extraT = next.slice(1); sel.n = -1;
-      render(); return;
-    }
+    const [ups, uts] = expandSel([], [ti]);
+    if (e.shiftKey) { toggleUnit(ups, uts); render(); return; }
     // Pressing on text that's already selected drags the whole selection along with it.
-    if (!ts.includes(ti)) setSelection([], [ti]);
+    if (!selectedTexts().includes(ti)) setSelection(ups, uts);
     sel.n = -1;
     drag = { type: 'move', list: selectedPaths(), tlist: selectedTexts(), last: pt, pre: state() }; render(); return;
   }
@@ -856,16 +974,10 @@ function editDown(pt, e) {
     }
   }
   if (hp >= 0) {
-    const i = hp;
-    if (e.shiftKey && sel.p >= 0) {
-      const set = selectedPaths();
-      if (set.includes(i)) {
-        const rest = set.filter(j => j !== i);
-        sel = { p: rest.length ? rest[0] : -1, n: -1 }; extra = rest.slice(1);
-      } else { sel.n = -1; extra.push(i); }
-      render(); return;
-    }
-    if (!keepGroup) sel = { p: i, n: -1 };
+    // Clicking selects the whole group or combined shape the path belongs to.
+    const [ups, uts] = expandSel([hp], []);
+    if (e.shiftKey) { toggleUnit(ups, uts); render(); return; }
+    if (!keepGroup) setSelection(ups, uts);
     drag = { type: 'move', list: selectedPaths(), tlist: selectedTexts(), last: pt, pre: state() };
     render(); return;
   }
@@ -888,7 +1000,8 @@ function marqueeSelect(m) {
   const inside = q => q.x >= x0 && q.x <= x1 && q.y >= y0 && q.y <= y1;
   const ps = m.samples.map((pts, i) => pts && pts.some(inside) ? i : -1).filter(i => i >= 0);
   const ts = m.tboxes.map((b, i) => b && b.x <= x1 && b.x + b.width >= x0 && b.y <= y1 && b.y + b.height >= y0 ? i : -1).filter(i => i >= 0);
-  setSelection([...new Set([...m.baseP, ...ps])], [...new Set([...m.baseT, ...ts])]);
+  const [ep, et] = expandSel(ps, ts);
+  setSelection([...new Set([...m.baseP, ...ep])], [...new Set([...m.baseT, ...et])]);
 }
 
 /* ---------- circles ---------- */
@@ -1076,6 +1189,7 @@ window.addEventListener('keydown', e => {
   if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
   if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); finishPath(); selectAll(); return; }
+  if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); return; }
   if (mod) return;
   if (e.code === 'Space' && !spaceDown) { spaceDown = true; document.body.classList.add('panning'); e.preventDefault(); return; }
   switch (e.key) {
@@ -1302,16 +1416,26 @@ async function importSVG(file) {
     const toRoot = new DOMMatrix().translate(-ox, -oy).multiply(s.getScreenCTM().inverse());
     const skip = 'defs, clipPath, mask, symbol, pattern, marker, linearGradient, radialGradient, filter';
     const shown = el => { for (let n = el; n && n !== s.parentNode; n = n.parentElement) if (getComputedStyle(n).display === 'none') return false; return true; };
-    const items = [];
+    const items = [], gKeys = new Map();
+    // Each top-level <g> in the file becomes a group.
+    const groupKey = el => {
+      let top = null;
+      for (let n = el.parentElement; n && n !== s; n = n.parentElement) if (n.localName === 'g') top = n;
+      if (!top) return undefined;
+      if (!gKeys.has(top)) gKeys.set(top, gKeys.size);
+      return gKeys.get(top);
+    };
+    let elNo = 0;
     for (const el of s.querySelectorAll('path, rect, circle, ellipse, line, polyline, polygon, text')) {
       if (el.closest(skip) || !shown(el)) continue;
+      const gk = groupKey(el); elNo++;
       const m = toRoot.multiply(el.getScreenCTM()), cs = getComputedStyle(el);
       const tp = q => q && { x: m.a * q.x + m.c * q.y + m.e, y: m.b * q.x + m.d * q.y + m.f };
       if (el.localName === 'text') {
         const str = el.textContent.replace(/\s+/g, ' ').trim(); if (!str) continue;
         const b = el.getBBox(), c = tp({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
         const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1;
-        items.push({ t: { x: c.x, y: c.y, text: str, size: Math.round(parseFloat(cs.fontSize) * scale * 10) / 10 || 16,
+        items.push({ gk, t: { x: c.x, y: c.y, text: str, size: Math.round(parseFloat(cs.fontSize) * scale * 10) / 10 || 16,
           color: cssColorToHex(cs.fill, shadow) || '#000000', font: (cs.fontFamily.split(',')[0] || 'Figtree').replace(/["']/g, '').trim() } });
         continue;
       }
@@ -1322,8 +1446,9 @@ async function importSVG(file) {
       const strokeHex = cssColorToHex(cs.stroke, shadow);
       const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1;
       const stroke = strokeHex || style.color, sw = strokeHex ? Math.round(parseFloat(cs.strokeWidth || '1') * scale * 100) / 100 : 0;
-      for (const sp of subs) {
-        if (sp.nodes.length < 2) continue;
+      // An element with several contours (like the letter O) becomes a combined shape, so its holes stay holes.
+      const parts = subs.filter(sp => sp.nodes.length >= 2), ck = parts.length > 1 ? elNo : undefined;
+      for (const sp of parts) {
         sp.nodes.forEach(n => {
           Object.assign(n, tp(n)); n.hi = tp(n.hi); n.ho = tp(n.ho);
           // Keep a sharp corner sharp when its handles are later dragged.
@@ -1332,19 +1457,25 @@ async function importSVG(file) {
             n.corner = !(la && lb && (ax * bx + ay * by) / (la * lb) < -0.999);
           }
         });
-        items.push({ p: { nodes: sp.nodes, closed: sp.closed, fill, stroke, sw, kind: el.localName === 'rect' ? 'rect' : (el.localName === 'circle' ? 'circle' : undefined) } });
+        items.push({ gk, ck, fr: cs.fillRule === 'evenodd' ? 'evenodd' : 'nonzero', p: { nodes: sp.nodes, closed: sp.closed, fill, stroke, sw, kind: el.localName === 'rect' ? 'rect' : (el.localName === 'circle' ? 'circle' : undefined) } });
       }
     }
     if (!items.length) { alert('No shapes or text were found in that SVG.'); return; }
     snap();
     const emptyBoard = !paths.length && !texts.length && !hasImage;
     if (emptyBoard) setDoc(Math.round(w), Math.round(h));
-    let z = nextZ();
-    const added = [], addedT = [];
+    let z = nextZ(), id = newId();
+    const added = [], addedT = [], gIds = new Map(), cIds = new Map();
+    const idFor = (map, key) => { if (!map.has(key)) map.set(key, id++); return map.get(key); };
     items.forEach(it => {
-      if (it.p) { it.p.z = z++; paths.push(it.p); added.push(paths.length - 1); }
-      else { it.t.z = z++; texts.push(it.t); addedT.push(texts.length - 1); }
+      const r = it.p || it.t;
+      if (it.gk !== undefined) r.g = idFor(gIds, it.gk);
+      if (it.ck !== undefined) { r.cp = idFor(cIds, it.ck); r.fr = it.fr; }
+      r.z = z++;
+      if (it.p) { paths.push(r); added.push(paths.length - 1); }
+      else { texts.push(r); addedT.push(texts.length - 1); }
     });
+    normStructure();
     setTool('edit');
     // Select the imported shapes so they can be moved or scaled right away.
     setSelection(added, addedT);
@@ -1458,42 +1589,87 @@ $('clear').onclick = () => {
   snap(); paths = []; texts = []; selT = -1; extraT = []; extra = []; cur = null; sel = { p: -1, n: -1 }; render(); save();
 };
 
-// Everything goes in one group in stacking order. Hidden items are left out.
+// Everything goes in stacking order. Groups become <g> elements, combined shapes one <path>. Hidden items are left out.
+function svgPath(ref, pad) {
+  if (ref.cp == null && ref.nodes.length < 2) return '';
+  const st = ref.sw > 0 ? ` stroke="${ref.stroke}" stroke-width="${ref.sw}"` : ' stroke="none"';
+  const d = ref.cp != null ? combinedD(ref.cp) : pathD(ref), fr = ref.cp != null ? ` fill-rule="${ref.fr || 'evenodd'}"` : '';
+  return `${pad}<path${ref.fill ? ` fill="${ref.fill}"` : ''}${st}${fr} d="${d}"/>`;
+}
+function svgText(ref, pad) {
+  return `${pad}<text x="${f(ref.x)}" y="${f(ref.y)}" stroke="none" font-family="${esc(fontStack(ref.font))}" font-size="${ref.size}" fill="${ref.color}" text-anchor="middle" dominant-baseline="central">${esc(ref.text)}</text>`;
+}
 function buildSVG() {
-  const body = layerItems().filter(it => !it.ref.hidden).map(({ k, ref }) => {
-    if (k === 'p') {
-      if (ref.nodes.length < 2) return '';
-      const st = ref.sw > 0 ? ` stroke="${ref.stroke}" stroke-width="${ref.sw}"` : ' stroke="none"';
-      return `    <path${ref.fill ? ` fill="${ref.fill}"` : ''}${st} d="${pathD(ref)}"/>`;
+  const lines = [], doneCp = new Set();
+  let openG = null;
+  layerItems().filter(it => !it.ref.hidden).forEach(({ k, ref }) => {
+    if (ref.g !== openG) {
+      if (openG != null) lines.push('    </g>');
+      if (ref.g != null) lines.push(`    <g id="group-${ref.g}">`);
+      openG = ref.g ?? null;
     }
-    return `    <text x="${f(ref.x)}" y="${f(ref.y)}" stroke="none" font-family="${esc(fontStack(ref.font))}" font-size="${ref.size}" fill="${ref.color}" text-anchor="middle" dominant-baseline="central">${esc(ref.text)}</text>`;
-  }).filter(Boolean).join('\n');
+    const pad = openG != null ? '      ' : '    ';
+    if (k === 'p') {
+      if (ref.cp != null) { if (doneCp.has(ref.cp)) return; doneCp.add(ref.cp); }
+      lines.push(svgPath(ref, pad));
+    } else lines.push(svgText(ref, pad));
+  });
+  if (openG != null) lines.push('    </g>');
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${doc.w}" height="${doc.h}" viewBox="0 0 ${doc.w} ${doc.h}">\n` +
     `  <g fill="none" stroke-linecap="round" stroke-linejoin="round">\n` +
-    body + `\n  </g>\n</svg>\n`;
+    lines.filter(Boolean).join('\n') + `\n  </g>\n</svg>\n`;
 }
 
 /* ---------- layers panel ---------- */
+// Rows go front to back. A group shows as a header with its contents indented below it;
+// a combined shape is a single row. Each row stands for a "unit" id: g:<id>, c:<id>, p:<index> or t:<index>.
 const EYE = '<svg viewBox="0 0 16 16"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>';
 const EYE_OFF = '<svg viewBox="0 0 16 16"><path d="M2 2l12 12M6.6 3.7A6.7 6.7 0 0 1 8 3.5C12.1 3.5 14.5 8 14.5 8a11 11 0 0 1-1.9 2.5M10 12.1a6 6 0 0 1-2 .4C3.9 12.5 1.5 8 1.5 8a11 11 0 0 1 2.6-3"/></svg>';
+const FOLDER = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M1.5 4.5v8h13v-7H7.5l-1.5-1.5h-4.5z"/></svg>';
 function layerName(it) {
   if (it.k === 't') return `“${it.ref.text}”`;
   const p = it.ref, base = p.kind === 'circle' ? 'Circle' : p.kind === 'rect' ? 'Rectangle' : p.closed ? 'Shape' : 'Path';
   return `${base} ${it.i + 1}`;
 }
+const refIndex = r => { const i = paths.indexOf(r); return i >= 0 ? { k: 'p', i } : { k: 't', i: texts.indexOf(r) }; };
+function unitId(u, inner) {
+  const r = u[0];
+  if (!inner && r.g != null) return 'g:' + r.g;
+  if (r.cp != null) return 'c:' + r.cp;
+  const x = refIndex(r); return x.k + ':' + x.i;
+}
+function unitRefs(id) {
+  const [k, v] = id.split(':'), n = +v;
+  if (k === 'g') return [...paths, ...texts].filter(r => r.g === n);
+  if (k === 'c') return paths.filter(r => r.cp === n);
+  return [k === 'p' ? paths[n] : texts[n]].filter(Boolean);
+}
+function unitName(id, refs) {
+  const [k, v] = id.split(':');
+  if (k === 'g') return `Group ${v}`;
+  if (k === 'c') return `Combined shape ${v}`;
+  return layerName({ k, i: +v, ref: refs[0] });
+}
 let layersHtml = '';
 function renderLayers() {
   if ($('layers').hidden) return;
-  const rows = layerItems().reverse().map(it => {
-    const r = it.ref, cls = 'layer' + (isSelected(it) ? ' on' : '') + (r.hidden ? ' off' : '');
-    const sw = it.k === 't'
-      ? `<span class="sw" style="color:${r.color};font-family:${esc(fontStack(r.font))}">T</span>`
+  const selSet = new Set(selectedRefs()), rows = [];
+  const row = (id, refs, cls) => {
+    const r = refs.slice().sort((a, b) => a.z - b.z)[0], isT = texts.includes(r);
+    const on = refs.every(x => selSet.has(x)), off = refs.every(x => x.hidden), name = unitName(id, refs);
+    const sw = id.startsWith('g:') ? `<span class="sw">${FOLDER}</span>`
+      : isT ? `<span class="sw" style="color:${r.color};font-family:${esc(fontStack(r.font))}">T</span>`
       : `<span class="sw" style="background:${r.fill || 'transparent'};border:2px solid ${r.sw > 0 ? r.stroke : 'transparent'}"></span>`;
-    return `<li class="${cls}" draggable="true" data-k="${it.k}" data-i="${it.i}">` +
-      `<button class="eye" data-eye aria-label="${r.hidden ? 'Show' : 'Hide'} ${esc(layerName(it))}" title="${r.hidden ? 'Show' : 'Hide'}">${r.hidden ? EYE_OFF : EYE}</button>` +
-      `${sw}<span class="lname">${esc(layerName(it))}</span></li>`;
-  }).join('');
-  const html = rows || '<li class="layers-none">Nothing here yet. Shapes and text you add will be listed, front to back.</li>';
+    rows.push(`<li class="layer ${cls}${on ? ' on' : ''}${off ? ' off' : ''}" draggable="true" data-u="${id}">` +
+      `<button class="eye" data-eye aria-label="${off ? 'Show' : 'Hide'} ${esc(name)}" title="${off ? 'Show' : 'Hide'}">${off ? EYE_OFF : EYE}</button>` +
+      `${sw}<span class="lname">${esc(name)}</span></li>`);
+  };
+  buildUnits(layerItems().map(x => x.ref), 'top').reverse().forEach(u => {
+    const id = unitId(u);
+    row(id, u, id.startsWith('g:') ? 'grp' : '');
+    if (id.startsWith('g:')) buildUnits(u, 'inner').reverse().forEach(iu => row(unitId(iu, true), iu, 'indent'));
+  });
+  const html = rows.join('') || '<li class="layers-none">Nothing here yet. Shapes and text you add will be listed, front to back.</li>';
   if (html !== layersHtml) { $('layer-list').innerHTML = html; layersHtml = html; }
 }
 function toggleLayers(open = $('layers').hidden) {
@@ -1501,36 +1677,35 @@ function toggleLayers(open = $('layers').hidden) {
   $('layers-btn').setAttribute('aria-pressed', String(open));
   style.layersOpen = open; layersHtml = ''; render(); save();
 }
-const rowItem = li => ({ k: li.dataset.k, i: +li.dataset.i });
-const refOf = ({ k, i }) => k === 'p' ? paths[i] : texts[i];
-function selectLayer(it, add) {
+// Clicking a row selects exactly what it stands for (a group header selects the whole group).
+function selectLayer(id, add) {
   if (tool !== 'edit' && tool !== 'pan') setTool('edit'); else { commitText(); finishPath(); }
-  // Shift-click toggles the row in the selection; a plain click selects only that row.
-  const ps = selectedPaths(), ts = selectedTexts();
-  const toggle = (arr, i) => arr.includes(i) ? arr.filter(j => j !== i) : [...arr, i];
-  if (!add) setSelection(it.k === 'p' ? [it.i] : [], it.k === 't' ? [it.i] : []);
-  else if (it.k === 'p') setSelection(toggle(ps, it.i), ts);
-  else setSelection(ps, toggle(ts, it.i));
+  const refs = unitRefs(id), cur = selectedRefs();
+  if (!add) selectRefs(refs);
+  else if (refs.every(r => cur.includes(r))) selectRefs(cur.filter(r => !refs.includes(r)));
+  else selectRefs([...new Set([...cur, ...refs])]);
   render();
 }
 const layerList = $('layer-list'), list = layerList;
 list.addEventListener('click', e => {
   const li = e.target.closest('.layer'); if (!li) return;
-  const it = rowItem(li), ref = refOf(it); if (!ref) return;
+  const id = li.dataset.u, refs = unitRefs(id); if (!refs.length) return;
   if (e.target.closest('[data-eye]')) {
     commitText(); snap();
-    ref.hidden = !ref.hidden;
-    if (ref.hidden) setSelection(selectedPaths().filter(j => !(it.k === 'p' && j === it.i)), selectedTexts().filter(j => !(it.k === 't' && j === it.i)));
+    const hide = !refs.every(r => r.hidden);
+    refs.forEach(r => { r.hidden = hide; });
+    if (hide) selectRefs(selectedRefs().filter(r => !refs.includes(r)));
     render(); save(); return;
   }
-  selectLayer(it, e.shiftKey);
+  selectLayer(id, e.shiftKey);
 });
 // Drag rows to restack. Dropping on the top half of a row puts the item above it (in front).
+// Dropping onto a group's contents moves the item into that group; dropping outside takes it out.
 let dragRow = null;
 const clearDrop = () => list.querySelectorAll('.drop-above,.drop-below').forEach(n => n.classList.remove('drop-above', 'drop-below'));
 list.addEventListener('dragstart', e => {
   const li = e.target.closest('.layer'); if (!li) return;
-  dragRow = rowItem(li); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', '');
+  dragRow = li.dataset.u; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', '');
 });
 list.addEventListener('dragover', e => {
   const li = e.target.closest('.layer'); if (!li || !dragRow) return;
@@ -1544,19 +1719,35 @@ list.addEventListener('drop', e => {
   e.preventDefault();
   const li = e.target.closest('.layer'); clearDrop();
   if (!li || !dragRow) return;
-  const target = rowItem(li), src = dragRow; dragRow = null;
-  if (target.k === src.k && target.i === src.i) return;
+  const src = dragRow; dragRow = null;
+  let tgt = li.dataset.u;
+  const moved = unitRefs(src), tRefs0 = unitRefs(tgt);
+  if (src === tgt || !moved.length || tRefs0.some(r => moved.includes(r))) return;
   const r = li.getBoundingClientRect(), above = e.clientY < r.top + r.height / 2;
+  const isHeader = tgt.startsWith('g:');
+  let newG;
+  if (src.startsWith('g:')) {
+    // Groups don't nest: dropping a group among another group's contents places it next to that group.
+    const g = tRefs0[0].g;
+    if (!isHeader && g != null) tgt = 'g:' + g;
+    newG = moved[0].g;
+  } else newG = isHeader ? (above ? null : +tgt.slice(2)) : (tRefs0[0].g ?? null);
   commitText(); snap();
-  const top = layerItems().reverse(); // front first, like the panel
-  const from = top.findIndex(x => x.k === src.k && x.i === src.i), moved = top.splice(from, 1)[0];
-  let to = top.findIndex(x => x.k === target.k && x.i === target.i);
-  if (!above) to++;
-  top.splice(to, 0, moved);
-  top.forEach((x, j) => { x.ref.z = top.length - 1 - j; });
-  render(); save();
+  const tRefs = unitRefs(tgt);
+  const front = layerItems().reverse().map(x => x.ref).filter(x => !moved.includes(x));
+  const idxs = tRefs.map(x => front.indexOf(x));
+  let at = (above || (isHeader && newG != null)) ? Math.min(...idxs) : Math.max(...idxs) + 1;
+  const movedFront = layerItems().reverse().map(x => x.ref).filter(x => moved.includes(x));
+  front.splice(at, 0, ...movedFront);
+  if (!src.startsWith('g:')) movedFront.forEach(x => { if (newG == null) delete x.g; else x.g = newG; });
+  front.forEach((x, j) => { x.z = front.length - 1 - j; });
+  normStructure(); render(); save();
 });
 $('layers-btn').onclick = () => toggleLayers();
+$('o-group').onclick = groupSel;
+$('o-ungroup').onclick = ungroupSel;
+$('o-combine').onclick = combineSel;
+$('o-release').onclick = releaseSel;
 $('z-front').onclick = () => arrange('front');
 $('z-up').onclick = () => arrange('up');
 $('z-down').onclick = () => arrange('down');
