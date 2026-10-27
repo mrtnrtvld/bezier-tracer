@@ -95,6 +95,8 @@ body[data-tool="text"] .label{pointer-events:auto;cursor:text}
 .bcorner{fill:var(--panel);stroke:var(--accent);pointer-events:none}
 .rothandle{fill:var(--panel);stroke:var(--accent);pointer-events:none}
 .rotlabel{fill:var(--accent);font:600 12px Figtree,system-ui,sans-serif;pointer-events:none}
+#gridline{stroke:var(--muted);opacity:.35}
+.guide{stroke:var(--handle);pointer-events:none}
 .marquee{fill:color-mix(in srgb,var(--accent) 10%,transparent);stroke:var(--accent);pointer-events:none}
 .layers{position:absolute;top:8px;right:8px;bottom:8px;width:236px;max-width:calc(100% - 16px);display:flex;flex-direction:column;
   background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.14);overflow:hidden;z-index:2}
@@ -153,6 +155,13 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
       <button class="mi" id="flip-v" aria-pressed="false" title="Flip sketch and drawing vertically">Flip all vertically</button>
       <hr>
       <button class="mi" id="clear-sketch" title="Remove the sketch image (your paths stay)" disabled>Remove sketch</button>
+    </div></details>
+    <details class="menu" id="m-view"><summary>View</summary><div class="menu-pop">
+      <button class="mi" id="v-snap" aria-pressed="true">Snap to objects and canvas</button>
+      <button class="mi" id="v-grid" aria-pressed="false">Show grid <span class="sc">⌘'</span></button>
+      <button class="mi" id="v-gridsnap" aria-pressed="false">Snap to grid</button>
+      <label class="mi ctl">Grid size <input type="number" id="v-gridsize" min="2" max="500" step="1" value="20" aria-label="Grid size"></label>
+      <div class="mlabel">Hold ⌘ (Ctrl on Windows) while dragging to skip snapping.</div>
     </div></details>
     <details class="menu" id="m-object"><summary>Object</summary><div class="menu-pop" id="object-pop">
       <button class="mi" id="o-copy">Copy <span class="sc">⌘C</span></button>
@@ -216,9 +225,11 @@ dialog textarea{width:100%;height:280px;font:12px/1.45 ui-monospace,SFMono-Regul
 
 <div class="stage" id="stage">
   <svg id="svg" xmlns="http://www.w3.org/2000/svg">
+    <defs><pattern id="gridpat" patternUnits="userSpaceOnUse" width="20" height="20"><path id="gridline" d="M20 0H0V20" fill="none"/></pattern></defs>
     <g id="world">
       <rect class="board" id="board" x="0" y="0" width="1000" height="750"/>
       <image id="img" x="0" y="0" opacity="0.5" preserveAspectRatio="none"/>
+      <rect id="grid" x="0" y="0" width="1000" height="750" fill="url(#gridpat)" pointer-events="none" visibility="hidden"/>
       <g id="paths"></g>
       <g id="overlay"></g>
     </g>
@@ -264,7 +275,8 @@ let view = { x: 0, y: 0, k: 1 };
 let texts = [];            // [{x, y, text, size, color, font, bold, italic, rot}]  x,y is the center; text may have several lines
 let selT = -1;             // index of the selected text, or -1
 let editT = null;          // text being typed: {i (-1 for new), x, y, size, color}
-let style = { color: '#2f6fd6', width: 3, fill: '#f2c94c', fillOn: false, textSize: 32, font: 'Figtree', bold: false, italic: false };
+let style = { color: '#2f6fd6', width: 3, fill: '#f2c94c', fillOn: false, textSize: 32, font: 'Figtree', bold: false, italic: false,
+  snap: true, grid: false, gridSnap: false, gridSize: 20 };
 let hover = null, drag = null, spaceDown = false, hasImage = false;
 let lastTap = { t: 0, x: 0, y: 0 };
 let extra = []; // additional selected paths (Shift-click)
@@ -597,7 +609,7 @@ function reversePath(p) {
 }
 
 /* ---------- view ---------- */
-function applyView() { world.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`); placeEditor(); }
+function applyView() { world.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`); placeEditor(); updateGrid(); }
 function fit() {
   const r = stage.getBoundingClientRect();
   const k = Math.min(r.width / doc.w, r.height / doc.h) * 0.92;
@@ -618,7 +630,7 @@ function setDoc(w, h) {
   doc = { w, h };
   board.setAttribute('width', w); board.setAttribute('height', h);
   $('docw').value = w; $('doch').value = h;
-  applyFlip();
+  applyFlip(); updateGrid();
 }
 // Resize the canvas from the W × H boxes. Content stays where it is (anchored top-left).
 function resizeCanvas() {
@@ -733,6 +745,10 @@ function render() {
     const cs = textCorners(i); if (!cs) return;
     o += `<polygon class="selline" points="${cs.map(q => q.x + ',' + q.y).join(' ')}" stroke-width="${1 / k}"/>`;
   });
+  if (drag && drag.guides) drag.guides.forEach(g => {
+    o += g.x != null ? `<line class="guide" x1="${g.x}" y1="-100000" x2="${g.x}" y2="100000" stroke-width="${1 / k}"/>`
+      : `<line class="guide" x1="-100000" y1="${g.y}" x2="100000" y2="${g.y}" stroke-width="${1 / k}"/>`;
+  });
   if (drag && drag.type === 'marquee') {
     const m = drag;
     o += `<rect class="marquee" x="${Math.min(m.a.x, m.b.x)}" y="${Math.min(m.a.y, m.b.y)}" width="${Math.abs(m.b.x - m.a.x)}" height="${Math.abs(m.b.y - m.a.y)}" stroke-width="${1 / k}"/>`;
@@ -836,6 +852,7 @@ function penDown(pt, e) {
     const h = nearestOnPaths(pt, 6 / view.k);
     if (h) { snap(); sel = { p: h.p, n: insertPoint(h) }; render(); save(); return; }
   }
+  pt = snapPoint(pt, snapTargets(), e).pt;
   snap();
   if (cur === null) { paths.push({ nodes: [], closed: false, fill: newFill(), ...newStroke(), z: nextZ() }); cur = paths.length - 1; }
   const node = { x: pt.x, y: pt.y, hi: null, ho: null };
@@ -1012,7 +1029,8 @@ function editDown(pt, e) {
           type: 'scale', pre: state(), corner: c, opp: { x: o[0], y: o[1] },
           center: { x: (box.x0 + box.x1) / 2, y: (box.y0 + box.y1) / 2 },
           list, orig: list.map(pi => JSON.parse(JSON.stringify(paths[pi].nodes))),
-          tlist, torig: tlist.map(ti => ({ x: texts[ti].x, y: texts[ti].y, size: texts[ti].size }))
+          tlist, torig: tlist.map(ti => ({ x: texts[ti].x, y: texts[ti].y, size: texts[ti].size })),
+          T: snapTargets(selectedRefs())
         };
         return;
       }
@@ -1045,7 +1063,9 @@ function editDown(pt, e) {
     const ns = paths[pi].nodes;
     for (let i = ns.length - 1; i >= 0; i--) {
       if (dist(pt, ns[i]) < hr) {
-        sel = { p: pi, n: i }; drag = { type: 'anchor', node: ns[i], last: pt, pre: state() }; render(); return;
+        sel = { p: pi, n: i };
+        drag = { type: 'anchor', node: ns[i], off: { x: ns[i].x - pt.x, y: ns[i].y - pt.y }, pre: state(), T: snapTargets([paths[pi]]) };
+        render(); return;
       }
     }
   }
@@ -1072,7 +1092,9 @@ function editDown(pt, e) {
 function startMove(pt, e) {
   const pre = state();
   if (e.altKey) pasteData(copyData(), 0, 0, true);
-  drag = { type: 'move', list: selectedPaths(), tlist: selectedTexts(), last: pt, pre, dup: e.altKey };
+  const refs = selectedRefs();
+  drag = { type: 'move', list: selectedPaths(), tlist: selectedTexts(), start: pt, applied: { x: 0, y: 0 }, pre, dup: e.altKey,
+    box: refsBox(refs), T: snapTargets(refs) };
   render();
 }
 // Select every path with part of its outline inside the box, and every text the box touches.
@@ -1084,6 +1106,65 @@ function marqueeSelect(m) {
   const ts = m.tboxes.map((b, i) => b && b.x <= x1 && b.x + b.width >= x0 && b.y <= y1 && b.y + b.height >= y0 ? i : -1).filter(i => i >= 0);
   const [ep, et] = expandSel(ps, ts);
   setSelection([...new Set([...m.baseP, ...ep])], [...new Set([...m.baseT, ...et])]);
+}
+
+/* ---------- snapping ---------- */
+// Targets are the left/center/right (and top/middle/bottom) of other visible items and of the canvas.
+function snapTargets(exclude) {
+  const ex = new Set(exclude || []), xs = [], ys = [];
+  if (style.snap === false) return { xs, ys };
+  const add = b => { xs.push(b.x0, (b.x0 + b.x1) / 2, b.x1); ys.push(b.y0, (b.y0 + b.y1) / 2, b.y1); };
+  add({ x0: 0, y0: 0, x1: doc.w, y1: doc.h });
+  paths.forEach((p, i) => { if (!p.hidden && !ex.has(p) && p.nodes.length > 1) add(boundsOf([i])); });
+  texts.forEach((t, i) => { if (t.hidden || ex.has(t)) return; const b = textBox(i); if (b) add({ x0: b.x, y0: b.y, x1: b.x + b.width, y1: b.y + b.height }); });
+  return { xs, ys };
+}
+const snapOff = e => e && (e.metaKey || e.ctrlKey);
+const gridStep = () => Math.max(1, style.gridSize || 20);
+const toGrid = v => Math.round(v / gridStep()) * gridStep();
+// The smallest move (within tolerance) that puts v on one of the targets, or null.
+function nearest(v, list, tol) {
+  let best = null;
+  for (const t of list) { const d = t - v; if (Math.abs(d) <= tol && (best === null || Math.abs(d) < Math.abs(best))) best = d; }
+  return best;
+}
+function snapPoint(pt, T, e) {
+  if (snapOff(e) || !T) return { pt, guides: [] };
+  const tol = 6 / view.k, guides = [];
+  let { x, y } = pt;
+  const dx = nearest(x, T.xs, tol), dy = nearest(y, T.ys, tol);
+  if (dx !== null) { x += dx; guides.push({ x }); } else if (style.gridSnap) x = toGrid(x);
+  if (dy !== null) { y += dy; guides.push({ y }); } else if (style.gridSnap) y = toGrid(y);
+  return { pt: { x, y }, guides };
+}
+// Adjust a drag offset so the moving box's edges or center line up with a target.
+function snapDelta(box, dx, dy, T, e) {
+  if (snapOff(e) || !box || !T) return { dx, dy, guides: [] };
+  const tol = 6 / view.k, guides = [];
+  const axis = (lo, hi, d, list, key) => {
+    let best = null, at = null;
+    [lo, (lo + hi) / 2, hi].forEach(c => { const m = nearest(c + d, list, tol); if (m !== null && (best === null || Math.abs(m) < Math.abs(best))) { best = m; at = c + d + m; } });
+    if (best !== null) { guides.push({ [key]: at }); return d + best; }
+    return style.gridSnap ? d + toGrid(lo + d) - (lo + d) : d;
+  };
+  return { dx: axis(box.x0, box.x1, dx, T.xs, 'x'), dy: axis(box.y0, box.y1, dy, T.ys, 'y'), guides };
+}
+// Draw the grid, thinning it out when zoomed far out so lines stay at least 8px apart.
+function updateGrid() {
+  const g = $('grid'); if (!g) return;
+  g.setAttribute('width', doc.w); g.setAttribute('height', doc.h);
+  g.setAttribute('visibility', style.grid ? 'visible' : 'hidden');
+  let step = gridStep(); while (step * view.k < 8) step *= 2;
+  const pat = $('gridpat'); pat.setAttribute('width', step); pat.setAttribute('height', step);
+  $('gridline').setAttribute('d', `M${step} 0H0V${step}`);
+  $('gridline').setAttribute('stroke-width', 1 / view.k);
+}
+function syncView() {
+  $('v-snap').setAttribute('aria-pressed', String(style.snap !== false));
+  $('v-grid').setAttribute('aria-pressed', String(!!style.grid));
+  $('v-gridsnap').setAttribute('aria-pressed', String(!!style.gridSnap));
+  $('v-gridsize').value = gridStep();
+  updateGrid();
 }
 
 /* ---------- circles ---------- */
@@ -1098,13 +1179,14 @@ function setCircle(p, c, r) {
   ];
   p.closed = true;
 }
-function circleDown(pt) {
+function circleDown(pt, e) {
+  const T = snapTargets(); pt = snapPoint(pt, T, e).pt;
   snap();
   const p = { nodes: [], closed: true, fill: newFill(), ...newStroke(), z: nextZ(), kind: 'circle' };
   setCircle(p, pt, 0);
   paths.push(p);
   sel = { p: paths.length - 1, n: -1 };
-  drag = { type: 'circle', p: paths.length - 1, c: pt };
+  drag = { type: 'circle', p: paths.length - 1, c: pt, T };
   render();
 }
 
@@ -1114,13 +1196,14 @@ function setRect(p, a, b) {
   p.nodes = [c(a.x, a.y), c(b.x, a.y), c(b.x, b.y), c(a.x, b.y)];
   p.closed = true;
 }
-function rectDown(pt) {
+function rectDown(pt, e) {
+  const T = snapTargets(); pt = snapPoint(pt, T, e).pt;
   snap();
   const p = { nodes: [], closed: true, fill: newFill(), ...newStroke(), z: nextZ(), kind: 'rect' };
   setRect(p, pt, pt);
   paths.push(p);
   sel = { p: paths.length - 1, n: -1 };
-  drag = { type: 'rect', p: paths.length - 1, a: pt };
+  drag = { type: 'rect', p: paths.length - 1, a: pt, T };
   render();
 }
 
@@ -1150,18 +1233,19 @@ svg.addEventListener('pointerdown', e => {
     }
   }
   if (tool === 'pen') { extra = []; selT = -1; extraT = []; penDown(pt, e); }
-  else if (tool === 'circle') { extra = []; selT = -1; extraT = []; circleDown(pt); }
-  else if (tool === 'rect') { extra = []; selT = -1; extraT = []; rectDown(pt); }
+  else if (tool === 'circle') { extra = []; selT = -1; extraT = []; circleDown(pt, e); }
+  else if (tool === 'rect') { extra = []; selT = -1; extraT = []; rectDown(pt, e); }
   else editDown(pt, e);
 });
 
 svg.addEventListener('pointermove', e => {
-  const pt = toDoc(e); hover = pt;
+  let pt = toDoc(e); hover = pt;
   if (!drag) { if (tool === 'pen') render(); return; }
   if (drag.pre && !drag.moved) { pushUndo(drag.pre); drag.moved = true; }
   const n = drag.node;
   switch (drag.type) {
     case 'scale': {
+      const sp = snapPoint(pt, drag.T, e); pt = sp.pt; drag.guides = sp.guides;
       const a = e.altKey ? drag.center : drag.opp, c = drag.corner;
       const vx = c.x - a.x, vy = c.y - a.y;
       let sx, sy;
@@ -1195,18 +1279,21 @@ svg.addEventListener('pointermove', e => {
       render(); break;
     }
     case 'move': {
-      const dx = pt.x - drag.last.x, dy = pt.y - drag.last.y;
+      const r = snapDelta(drag.box, pt.x - drag.start.x, pt.y - drag.start.y, drag.T, e);
+      const dx = r.dx - drag.applied.x, dy = r.dy - drag.applied.y;
+      drag.applied = { x: r.dx, y: r.dy }; drag.guides = r.guides;
       drag.list.forEach(pi => paths[pi].nodes.forEach(q => {
         q.x += dx; q.y += dy;
         if (q.hi) { q.hi.x += dx; q.hi.y += dy; }
         if (q.ho) { q.ho.x += dx; q.ho.y += dy; }
       }));
       (drag.tlist || []).forEach(ti => { texts[ti].x += dx; texts[ti].y += dy; });
-      drag.last = pt; render(); break;
+      render(); break;
     }
     case 'marquee':
       drag.b = pt; marqueeSelect(drag); render(); break;
     case 'rect': {
+      const sp = snapPoint(pt, drag.T, e); pt = sp.pt; drag.guides = sp.guides;
       let dx = pt.x - drag.a.x, dy = pt.y - drag.a.y;
       if (e.shiftKey) { const s = Math.max(Math.abs(dx), Math.abs(dy)); dx = Math.sign(dx || 1) * s; dy = Math.sign(dy || 1) * s; }
       const a = e.altKey ? { x: drag.a.x - dx, y: drag.a.y - dy } : drag.a;
@@ -1215,6 +1302,7 @@ svg.addEventListener('pointermove', e => {
       setRect(paths[drag.p], a, b); render(); break;
     }
     case 'circle':
+      { const sp = snapPoint(pt, drag.T, e); pt = sp.pt; drag.guides = sp.guides; }
       drag.r = dist(pt, drag.c); setCircle(paths[drag.p], drag.c, drag.r); render(); break;
     case 'pan':
       view.x = drag.vx + e.clientX - drag.sx; view.y = drag.vy + e.clientY - drag.sy; applyView(); break;
@@ -1222,11 +1310,12 @@ svg.addEventListener('pointermove', e => {
       if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 3) return;
       n.ho = { x: pt.x, y: pt.y }; n.hi = { x: 2 * n.x - pt.x, y: 2 * n.y - pt.y }; render(); break;
     case 'anchor': {
-      const dx = pt.x - drag.last.x, dy = pt.y - drag.last.y;
+      const sp = snapPoint({ x: pt.x + drag.off.x, y: pt.y + drag.off.y }, drag.T, e); drag.guides = sp.guides;
+      const dx = sp.pt.x - n.x, dy = sp.pt.y - n.y;
       n.x += dx; n.y += dy;
       if (n.hi) { n.hi.x += dx; n.hi.y += dy; }
       if (n.ho) { n.ho.x += dx; n.ho.y += dy; }
-      drag.last = pt; render(); break;
+      render(); break;
     }
     case 'handle': {
       const w = drag.which, other = w === 'hi' ? 'ho' : 'hi';
@@ -1283,6 +1372,7 @@ window.addEventListener('keydown', e => {
   if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
   if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); finishPath(); selectAll(); return; }
   if (mod && /^[bi]$/i.test(e.key) && selectedTexts().length) { e.preventDefault(); toggleTextStyle(e.key.toLowerCase() === 'b' ? 'bold' : 'italic'); return; }
+  if (mod && e.key === "'") { e.preventDefault(); toggleStyle('grid'); return; }
   if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSel(); return; }
   if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); return; }
   if (mod) return;
@@ -2005,6 +2095,11 @@ list.addEventListener('drop', e => {
   normStructure(); render(); save();
 });
 $('layers-btn').onclick = () => toggleLayers();
+const toggleStyle = key => { style[key] = !(style[key] ?? (key === 'snap')); syncView(); save(); };
+$('v-snap').onclick = () => toggleStyle('snap');
+$('v-grid').onclick = () => toggleStyle('grid');
+$('v-gridsnap').onclick = () => { toggleStyle('gridSnap'); if (style.gridSnap && !style.grid) toggleStyle('grid'); };
+$('v-gridsize').onchange = e => { const v = Math.round(+e.target.value); if (v >= 2 && v <= 500) style.gridSize = v; syncView(); save(); };
 $('o-copy').onclick = () => copySel();
 $('o-cut').onclick = () => { if (copySel()) deleteSelected(); };
 // The menu can't read the system clipboard without a permission prompt, so it pastes the last copy from this tab.
@@ -2047,6 +2142,7 @@ window.addEventListener('resize', () => { applyView(); });
 load();
 setDoc(doc.w, doc.h);
 setTool('pen');
+syncView();
 if (style.layersOpen) toggleLayers(true);
 fit();
 })();
