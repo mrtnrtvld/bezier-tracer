@@ -235,6 +235,8 @@ label.opt{color:var(--ink);margin-bottom:6px}
       <button class="mi" id="o-lock" title="Locked items can't be clicked or box-selected on the canvas">Lock selection</button>
       <button class="mi" id="o-unlock">Unlock all</button>
       <hr>
+      <button class="mi" id="o-outline" title="Turn the selected text into letter shapes you can edit point by point">Convert text to shapes <span class="sc">⇧⌘O</span></button>
+      <hr>
       <button class="mi" id="o-combine" title="Draw the selected paths as one shape, so shapes inside others cut holes">Combine shapes (cut holes)</button>
       <button class="mi" id="o-release" title="Split a combined shape back into separate paths">Release combined shape</button>
     </div></details>
@@ -981,7 +983,7 @@ const hints = {
   star: 'Drag from the center outward to draw a star; the first point follows the pointer. <kbd>Shift</kbd> snaps the angle. Set the points and inner radius in the style bar.',
   line: 'Drag to draw a straight line. <kbd>Shift</kbd> locks it to 45° steps.',
   circle: 'Drag from the center outward to draw a circle. It’s a regular Bézier path, so you can reshape it in Edit mode.',
-  text: 'Click to add text, or click existing text to change it. <kbd>Enter</kbd> places it, <kbd>Shift</kbd>+<kbd>Enter</kbd> starts a new line, <kbd>Esc</kbd> cancels. <kbd>⌘</kbd>+<kbd>B</kbd> / <kbd>⌘</kbd>+<kbd>I</kbd> for bold / italic. The color comes from Fill and the size from Size. In Edit mode, drag text to move it and double-click to retype it.',
+  text: 'Click to add text, or click existing text to change it. <kbd>Enter</kbd> places it, <kbd>Shift</kbd>+<kbd>Enter</kbd> starts a new line, <kbd>Esc</kbd> cancels. <kbd>⌘</kbd>+<kbd>B</kbd> / <kbd>⌘</kbd>+<kbd>I</kbd> for bold / italic. Object › Convert text to shapes turns text into editable letter shapes. The color comes from Fill and the size from Size. In Edit mode, drag text to move it and double-click to retype it.',
   pan: 'Drag to move around. Scroll to zoom. Hold <kbd>Space</kbd> in any tool to pan.'
 };
 function setTool(t) {
@@ -1685,6 +1687,7 @@ window.addEventListener('keydown', e => {
   if (mod && /^[bi]$/i.test(e.key) && selectedTexts().length) { e.preventDefault(); toggleTextStyle(e.key.toLowerCase() === 'b' ? 'bold' : 'italic'); return; }
   if (mod && e.key === "'") { e.preventDefault(); toggleStyle('grid'); return; }
   if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSel(); return; }
+  if (mod && e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); textToShapes(); return; }
   if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); return; }
   if (mod) return;
   if (e.altKey) {
@@ -2292,6 +2295,176 @@ $('tr-go').onclick = () => {
   }, 30);
 };
 
+/* ---------- text to shapes ---------- */
+// Letter shapes come from the actual font file, read with opentype.js (loaded on first use).
+// Google fonts are fetched as WOFF files from Fontsource; installed fonts are read through the
+// browser's font access (Chrome/Edge). Each letter goes exactly where the browser drew it.
+const OPENTYPE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/opentype.js/1.3.4/opentype.min.js';
+const OPENTYPE_SRI = 'sha384-3TaxGqyHrMuRIWY5Z5WHNIzgNRqGIUJE+mk6tm+g1wkm9Ux2kUyOLfy9AsNWXA6u';
+let opentypeP = null;
+function loadOpentype() {
+  if (window.opentype) return Promise.resolve(window.opentype);
+  return opentypeP || (opentypeP = new Promise((res, rej) => {
+    const sc = document.createElement('script');
+    sc.src = OPENTYPE_URL; sc.integrity = OPENTYPE_SRI; sc.crossOrigin = 'anonymous';
+    sc.onload = () => res(window.opentype);
+    sc.onerror = () => { opentypeP = null; sc.remove(); rej(new Error('Couldn’t load the font reader. Check your internet connection and try again.')); };
+    document.head.appendChild(sc);
+  }));
+}
+const googleCheck = new Map();
+// Same test as for embedding: genuine Google fonts load from fonts.gstatic.com/s/<name>/.
+function isGoogleFont(fam) {
+  if (fam === 'Figtree') return Promise.resolve(true);
+  if (!googleCheck.has(fam)) googleCheck.set(fam, fetch(`https://fonts.googleapis.com/css2?family=${encodeURIComponent(fam)}`)
+    .then(r => r.ok ? r.text() : '').then(t => t.includes(`fonts.gstatic.com/s/${fam.toLowerCase().replace(/[^a-z0-9]/g, '')}/`)).catch(() => false));
+  return googleCheck.get(fam);
+}
+// A Google font arrives in pieces by alphabet (latin, latin-ext, …); load more pieces only when a letter needs them.
+const FS_SUBSETS = ['latin', 'latin-ext', 'cyrillic', 'cyrillic-ext', 'greek', 'greek-ext', 'vietnamese'];
+function googleFontSet(fam, bold, italic) {
+  const id = fam.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''), fonts = [], pending = [...FS_SUBSETS];
+  const fetchOne = async subset => {
+    for (const w of bold ? [700, 400] : [400]) for (const st of italic ? ['italic', 'normal'] : ['normal']) {
+      try {
+        const r = await fetch(`https://cdn.jsdelivr.net/fontsource/fonts/${id}@latest/${subset}-${w}-${st}.woff`);
+        if (r.ok) return opentype.parse(await r.arrayBuffer());
+      } catch (e) { /* try the next variant */ }
+    }
+    return null;
+  };
+  return {
+    async fontFor(ch) {
+      for (;;) {
+        const hit = fonts.find(fo => fo.charToGlyphIndex(ch) > 0);
+        if (hit) return hit;
+        if (!pending.length) return fonts[0] || null;
+        const fo = await fetchOne(pending.shift());
+        if (fo) fonts.push(fo);
+      }
+    }
+  };
+}
+// Mac system fonts often come as collections (.ttc). Copy one font's tables out into a standalone font file.
+function fontFromCollection(buf, off) {
+  const dv = new DataView(buf), src = new Uint8Array(buf), num = dv.getUint16(off + 4), head = 12 + 16 * num, tables = [];
+  let size = head;
+  for (let i = 0; i < num; i++) {
+    const r = off + 12 + 16 * i, t = { tag: dv.getUint32(r), sum: dv.getUint32(r + 4), at: dv.getUint32(r + 8), len: dv.getUint32(r + 12) };
+    tables.push(t); size += (t.len + 3) & ~3;
+  }
+  const out = new ArrayBuffer(size), o = new DataView(out), bytes = new Uint8Array(out);
+  bytes.set(src.subarray(off, off + 12), 0);
+  let pos = head;
+  tables.forEach((t, i) => {
+    const r = 12 + 16 * i;
+    o.setUint32(r, t.tag); o.setUint32(r + 4, t.sum); o.setUint32(r + 8, pos); o.setUint32(r + 12, t.len);
+    bytes.set(src.subarray(t.at, t.at + t.len), pos); pos += (t.len + 3) & ~3;
+  });
+  return out;
+}
+function parseFontFile(buf, psName) {
+  const dv = new DataView(buf);
+  if (dv.getUint32(0) !== 0x74746366) return opentype.parse(buf);   // not 'ttcf': a single font
+  const n = dv.getUint32(8);
+  let first = null;
+  for (let i = 0; i < n; i++) {
+    const fo = opentype.parse(fontFromCollection(buf, dv.getUint32(12 + 4 * i)));
+    first = first || fo;
+    const ps = fo.names.postScriptName; if (!psName || (ps && Object.values(ps).includes(psName))) return fo;
+  }
+  return first;
+}
+async function localFontSet(fam, bold, italic) {
+  if (!canQueryFonts) return null;
+  let list;
+  try { list = (await window.queryLocalFonts()).filter(x => x.family === fam); } catch (e) { return null; }
+  if (!list.length) return null;
+  const pick = list.find(x => /bold|black|heavy/i.test(x.style) === bold && /italic|oblique/i.test(x.style) === italic)
+    || list.find(x => /regular|roman|book|medium/i.test(x.style)) || list[0];
+  const font = parseFontFile(await (await pick.blob()).arrayBuffer(), pick.postscriptName);
+  return { fontFor: async () => font };
+}
+const fontSets = new Map();
+async function fontSetFor(t) {
+  const fam = t.font || 'Figtree', key = `${fam}|${!!t.bold}|${!!t.italic}`;
+  if (fontSets.has(key)) return fontSets.get(key);
+  let set = null;
+  if (GENERIC.test(fam)) throw new Error(`“${fam === 'system-ui' ? 'System UI' : fam}” isn’t a single font file, so its letters can’t be read. Pick a specific font first.`);
+  if (await isGoogleFont(fam)) set = googleFontSet(fam, !!t.bold, !!t.italic);
+  else set = await localFontSet(fam, !!t.bold, !!t.italic);
+  if (!set) throw new Error(canQueryFonts
+    ? `Couldn’t read the font “${fam}”. Allow font access (Font menu › More system fonts…), then try again.`
+    : `This browser can’t read installed fonts like “${fam}”. Use Chrome or Edge, or pick a Google font such as Figtree.`);
+  fontSets.set(key, set);
+  return set;
+}
+// Letter outlines for one text, in document coordinates, positioned by the browser's own layout.
+async function textLetters(i) {
+  const t = texts[i], el = pathsG.querySelector(`[data-t="${i}"]`);
+  if (!el) return [];
+  const set = await fontSetFor(t), turn = rotator({ x: t.x, y: t.y }, t.rot || 0), out = [];
+  let idx = 0;
+  for (const line of t.text.split('\n')) {
+    for (const ch of (line || ' ')) {
+      let pos = null, ext = null;
+      try { pos = el.getStartPositionOfChar(idx); ext = el.getExtentOfChar(idx); } catch (e) { /* character not laid out */ }
+      idx += ch.length;
+      if (!pos || /\s/.test(ch)) continue;
+      const font = await set.fontFor(ch); if (!font) continue;
+      // The browser reports positions on the text's middle line; the letter's box (ascent + descent
+      // tall) tells us where its baseline is.
+      const A = font.ascender, D = -font.descender, baseY = ext && ext.height > 0 && A + D > 0 ? ext.y + ext.height * A / (A + D) : pos.y;
+      const d = font.charToGlyph(ch).getPath(pos.x, baseY, t.size).toPathData(3);
+      if (!d) continue;
+      const subs = parsePathD(d).filter(sp => sp.nodes.length >= 2);
+      subs.forEach(sp => sp.nodes.forEach(n => { Object.assign(n, turn(n)); n.hi = turn(n.hi); n.ho = turn(n.ho); }));
+      if (subs.length) out.push({ ch, subs });
+    }
+  }
+  return out;
+}
+let converting = false;
+async function textToShapes() {
+  commitText();
+  const ts = selectedTexts().filter(i => !texts[i].hidden);
+  if (!ts.length || converting) { if (!ts.length) alert('Select some text first.'); return; }
+  converting = true;
+  const hint = $('hint').innerHTML;
+  $('hint').textContent = 'Converting text to shapes…';
+  try {
+    await loadOpentype();
+    const results = [];
+    for (const i of ts) results.push({ ref: texts[i], letters: await textLetters(i) });
+    snap();
+    let id = newId();
+    const added = [];
+    results.forEach(({ ref: t, letters }) => {
+      // Letters keep the text's look and spot in the stacking order, grouped together (or in the text's group).
+      const gid = t.g ?? id++;
+      let k = 0;
+      letters.forEach(({ ch, subs }) => {
+        const cp = subs.length > 1 ? id++ : undefined;
+        subs.forEach(sp => {
+          const p = { nodes: sp.nodes, closed: sp.closed, fill: t.color, stroke: style.color, sw: 0, op: t.op ?? 100, z: t.z + (++k) / 1e6, g: gid, kind: 'letter', label: ch };
+          if (cp !== undefined) { p.cp = cp; p.fr = 'nonzero'; }
+          if (t.locked) p.locked = true;
+          paths.push(p); added.push(p);
+        });
+      });
+    });
+    const gone = new Set(results.map(r => r.ref));
+    texts = texts.filter(t => !gone.has(t));
+    normStructure();
+    selectRefs(added); render(); save();
+  } catch (e) {
+    alert(e.message || 'Converting the text failed.');
+  } finally {
+    converting = false;
+    $('hint').innerHTML = hint;
+  }
+}
+
 /* ---------- locking ---------- */
 function setLocked(refs, on) {
   if (!refs.length) return;
@@ -2612,6 +2785,7 @@ const FOLDER = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stro
 function layerName(it) {
   if (it.k === 't') return `“${it.ref.text.split('\n')[0]}${it.ref.text.includes('\n') ? ' …' : ''}”`;
   const p = it.ref, names = { circle: 'Circle', rect: 'Rectangle', polygon: 'Polygon', star: 'Star', line: 'Line', trace: 'Traced shape' };
+  if (p.kind === 'letter') return `Letter “${p.label}”`;
   const base = names[p.kind] || (p.closed ? 'Shape' : 'Path');
   return `${base} ${it.i + 1}`;
 }
@@ -2631,7 +2805,7 @@ function unitRefs(id) {
 function unitName(id, refs) {
   const [k, v] = id.split(':');
   if (k === 'g') return `Group ${v}`;
-  if (k === 'c') return `Combined shape ${v}`;
+  if (k === 'c') return refs[0] && refs[0].kind === 'letter' ? `Letter “${refs[0].label}”` : `Combined shape ${v}`;
   return layerName({ k, i: +v, ref: refs[0] });
 }
 let layersHtml = '';
@@ -2760,6 +2934,7 @@ $('o-flip-v').onclick = () => flipSel('v');
 $('o-group').onclick = groupSel;
 $('o-ungroup').onclick = ungroupSel;
 $('o-combine').onclick = combineSel;
+$('o-outline').onclick = textToShapes;
 $('o-lock').onclick = lockSel;
 $('o-unlock').onclick = unlockAll;
 $('o-release').onclick = releaseSel;

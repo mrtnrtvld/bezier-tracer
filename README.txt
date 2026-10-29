@@ -17,7 +17,8 @@ new items. Snapping and a grid are in the View menu; hold Cmd/Ctrl while draggin
 Editing
 In Edit mode: drag to move, box-select on empty space, drag the selection box corners to scale
 and its round handle to rotate. The Object menu has copy/paste/duplicate, group, align and
-distribute, rotate and flip, lock, and "Combine shapes" to cut holes. The Layers panel (L)
+distribute, rotate and flip, lock, "Combine shapes" to cut holes, and "Convert text to
+shapes" (works with Google fonts, and with installed fonts in Chrome or Edge). The Layers panel (L)
 shows everything front to back; drag rows to restack, use the eye to hide and the padlock to lock.
 
 Sketch
