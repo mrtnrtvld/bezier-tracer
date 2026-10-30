@@ -82,6 +82,12 @@ body[data-tool="pen"] #svg,body[data-tool="circle"] #svg,body[data-tool="rect"] 
 #shape-opts[hidden],#shape-opts [hidden]{display:none}
 body[data-tool="pan"] #svg,body.panning #svg{cursor:grab}
 .board{fill:var(--board)}
+.board.on{stroke:var(--accent);stroke-width:1.5px;vector-effect:non-scaling-stroke}
+.ablabel{fill:var(--muted);font-family:Figtree,system-ui,sans-serif;cursor:move;user-select:none;-webkit-user-select:none}
+.ablabel.on{fill:var(--accent);font-weight:600}
+#ab-list .mi.on{font-weight:600}
+#ex-board-row[hidden],.ex-all[hidden]{display:none}
+#ex-board-row{margin:0 0 8px}
 .trace{pointer-events:none}
 .hit{stroke:transparent;pointer-events:none}
 body[data-tool="edit"] .hit{pointer-events:stroke;cursor:move}
@@ -205,8 +211,20 @@ label.opt{color:var(--ink);margin-bottom:6px}
       <hr>
       <button class="mi" id="clear-sketch" title="Remove the sketch image (your paths stay)" disabled>Remove sketch</button>
     </div></details>
+    <details class="menu" id="m-boards"><summary>Artboards</summary><div class="menu-pop">
+      <button class="mi" id="ab-new" title="Add an empty artboard to the right of the others">New artboard</button>
+      <button class="mi" id="ab-dup" title="Copy the current artboard and everything on it">Duplicate artboard</button>
+      <button class="mi" id="ab-rename">Rename artboard…</button>
+      <button class="mi" id="ab-fit-art" title="Resize the current artboard to the artwork on it">Fit artboard to artwork</button>
+      <button class="mi" id="ab-del" title="Remove the current artboard and the artwork on it">Delete artboard</button>
+      <hr>
+      <div class="mlabel">Go to</div>
+      <div id="ab-list"></div>
+      <button class="mi" id="ab-all">Show all artboards <span class="sc">⇧0</span></button>
+      <div class="mlabel">Click an artboard to make it current; drag its name to move it.</div>
+    </div></details>
     <details class="menu" id="m-view"><summary>View</summary><div class="menu-pop">
-      <button class="mi" id="v-snap" aria-pressed="true">Snap to objects and canvas</button>
+      <button class="mi" id="v-snap" aria-pressed="true">Snap to objects and artboards</button>
       <button class="mi" id="v-grid" aria-pressed="false">Show grid <span class="sc">⌘'</span></button>
       <button class="mi" id="v-gridsnap" aria-pressed="false">Snap to grid</button>
       <label class="mi ctl">Grid size <input type="number" id="v-gridsize" min="2" max="500" step="1" value="20" aria-label="Grid size"></label>
@@ -222,7 +240,7 @@ label.opt{color:var(--ink);margin-bottom:6px}
       <button class="mi" id="o-group">Group <span class="sc">⌘G</span></button>
       <button class="mi" id="o-ungroup">Ungroup <span class="sc">⇧⌘G</span></button>
       <hr>
-      <div class="mlabel" title="Several items line up with each other; a single item lines up with the canvas">Align</div>
+      <div class="mlabel" title="Several items line up with each other; a single item lines up with the artboard">Align</div>
       <div class="mrow"><button id="a-l" title="Align left (Alt+A)" aria-label="Align left (Alt+A)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M2 1.5v13" fill="none"/><rect x="3.5" y="3.5" width="9" height="3" stroke="none"/><rect x="3.5" y="9.5" width="5" height="3" stroke="none"/></svg></button><button id="a-hc" title="Align centers horizontally (Alt+H)" aria-label="Align centers horizontally (Alt+H)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M8 1.5v13" fill="none"/><rect x="3" y="3.5" width="10" height="3" stroke="none"/><rect x="5" y="9.5" width="6" height="3" stroke="none"/></svg></button><button id="a-r" title="Align right (Alt+D)" aria-label="Align right (Alt+D)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M14 1.5v13" fill="none"/><rect x="3.5" y="3.5" width="9" height="3" stroke="none"/><rect x="7.5" y="9.5" width="5" height="3" stroke="none"/></svg></button><button id="a-t" title="Align top (Alt+W)" aria-label="Align top (Alt+W)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M1.5 2h13" fill="none"/><rect x="3.5" y="3.5" width="3" height="9" stroke="none"/><rect x="9.5" y="3.5" width="3" height="5" stroke="none"/></svg></button><button id="a-vc" title="Align middles vertically (Alt+V)" aria-label="Align middles vertically (Alt+V)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M1.5 8h13" fill="none"/><rect x="3.5" y="3" width="3" height="10" stroke="none"/><rect x="9.5" y="5" width="3" height="6" stroke="none"/></svg></button><button id="a-b" title="Align bottom (Alt+S)" aria-label="Align bottom (Alt+S)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M1.5 14h13" fill="none"/><rect x="3.5" y="3.5" width="3" height="9" stroke="none"/><rect x="9.5" y="7.5" width="3" height="5" stroke="none"/></svg></button></div>
       <div class="mlabel" title="Even gaps between 3 or more items">Distribute</div>
       <div class="mrow"><button id="d-h" title="Distribute horizontally (Alt+Shift+H)" aria-label="Distribute horizontally (Alt+Shift+H)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M1.5 1.5v13M14.5 1.5v13" fill="none"/><rect x="6.5" y="4" width="3" height="8" stroke="none"/></svg></button><button id="d-v" title="Distribute vertically (Alt+Shift+V)" aria-label="Distribute vertically (Alt+Shift+V)"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.3"><path d="M1.5 1.5h13M1.5 14.5h13" fill="none"/><rect x="4" y="6.5" width="8" height="3" stroke="none"/></svg></button></div>
@@ -282,10 +300,10 @@ label.opt{color:var(--ink);margin-bottom:6px}
     <label class="ctl" id="opt-points" title="Number of points for stars">Points <input type="number" id="points" min="3" max="64" step="1" value="5" aria-label="Star points"></label>
     <label class="ctl" id="opt-inner" title="Inner radius of stars, as a percentage of the outer radius">Inner % <input type="number" id="inner" min="5" max="95" step="1" value="45" aria-label="Star inner radius percent"></label>
   </div>
-  <div class="group" title="Canvas size in pixels. Your drawing stays anchored to the top-left corner.">
-    <label class="ctl">Canvas <input type="number" id="docw" class="dim" min="1" max="20000" step="1" aria-label="Canvas width"></label>
+  <div class="group" title="Size of the current artboard in pixels. It stays anchored to its top-left corner.">
+    <label class="ctl">Artboard <input type="number" id="docw" class="dim" min="1" max="20000" step="1" aria-label="Artboard width"></label>
     <span aria-hidden="true" style="color:var(--muted)">×</span>
-    <input type="number" id="doch" class="dim" min="1" max="20000" step="1" aria-label="Canvas height">
+    <input type="number" id="doch" class="dim" min="1" max="20000" step="1" aria-label="Artboard height">
   </div>
 </div>
 
@@ -293,9 +311,9 @@ label.opt{color:var(--ink);margin-bottom:6px}
   <svg id="svg" xmlns="http://www.w3.org/2000/svg">
     <defs><pattern id="gridpat" patternUnits="userSpaceOnUse" width="20" height="20"><path id="gridline" d="M20 0H0V20" fill="none"/></pattern></defs>
     <g id="world">
-      <rect class="board" id="board" x="0" y="0" width="1000" height="750"/>
+      <g id="boards"></g>
       <image id="img" x="0" y="0" opacity="0.5" preserveAspectRatio="none"/>
-      <rect id="grid" x="0" y="0" width="1000" height="750" fill="url(#gridpat)" pointer-events="none" visibility="hidden"/>
+      <g id="grid" pointer-events="none" visibility="hidden"></g>
       <g id="paths"></g>
       <g id="overlay"></g>
     </g>
@@ -348,12 +366,14 @@ label.opt{color:var(--ink);margin-bottom:6px}
       <button role="tab" id="tab-png" aria-selected="false" aria-controls="pane-png">PNG</button>
     </div>
   </div>
+  <label class="ctl opt" id="ex-board-row">Artboard <select id="ex-board" aria-label="Artboard to export"></select></label>
   <div id="pane-svg" role="tabpanel">
     <label class="ctl opt"><input type="checkbox" id="embed" checked> Embed fonts so text looks the same on other computers</label>
     <p class="note" id="font-note"></p>
     <textarea id="out" readonly spellcheck="false"></textarea>
     <div class="dlg-actions">
       <button id="download" class="primary">Download .svg</button>
+      <button id="download-all" class="ex-all" title="One .svg file per artboard">Download all artboards</button>
       <button id="copy">Copy SVG</button>
       <button id="close">Close</button>
     </div>
@@ -368,6 +388,7 @@ label.opt{color:var(--ink);margin-bottom:6px}
     <p class="note" id="png-note"></p>
     <div class="dlg-actions">
       <button id="download-png" class="primary" disabled>Download .png</button>
+      <button id="download-all-png" class="ex-all" title="One .png file per artboard">Download all artboards</button>
       <button id="close-png">Close</button>
     </div>
   </div>
@@ -376,10 +397,13 @@ label.opt{color:var(--ink);margin-bottom:6px}
 <script>
 (() => {
 const $ = id => document.getElementById(id);
-const svg = $('svg'), world = $('world'), board = $('board'), img = $('img');
+const svg = $('svg'), world = $('world'), img = $('img');
 const pathsG = $('paths'), overlayG = $('overlay'), stage = $('stage');
 
-let doc = { w: 1000, h: 750 };
+// Artboards: each is a page with its own size and position; one is current (`ab`).
+// The current board drives the size boxes, Fit, single-item alignment and export.
+let boards = [{ name: 'Artboard 1', x: 0, y: 0, w: 1000, h: 750 }], ab = 0;
+const B = () => boards[ab];
 let paths = [];            // [{closed, fill, stroke, sw, z, g, cp, fr, nodes:[{x,y,hi,ho,corner}]}]  fill: color or null; g: group id; cp: combined-shape id
 let cur = null;            // index of path being drawn with the pen
 let sel = { p: -1, n: -1 };
@@ -399,7 +423,7 @@ let undoStack = [], redoStack = [];
 const f = v => Math.round(v * 100) / 100;
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 // Undo steps also remember the selection, so undo/redo put it back the way it was.
-const state = () => JSON.stringify({ paths, texts, cur, flip, doc, skRect, s: { p: sel.p, n: sel.n, extra, selT, extraT } });
+const state = () => JSON.stringify({ paths, texts, cur, flip, boards, ab, skRect, s: { p: sel.p, n: sel.n, extra, selT, extraT } });
 const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 function pushUndo(s) { undoStack.push(s); if (undoStack.length > 200) undoStack.shift(); redoStack = []; }
@@ -409,7 +433,7 @@ function restore(s) {
   if (o.skRect) skRect = o.skRect;
   if (o.flip) flip = o.flip;
   applyFlip();
-  if (o.doc && (o.doc.w !== doc.w || o.doc.h !== doc.h)) { setDoc(o.doc.w, o.doc.h); fit(); }
+  if (o.boards) { boards = o.boards; ab = Math.min(o.ab ?? ab, boards.length - 1); syncBoards(); }
   extra = [];
   if (cur !== null && (!paths[cur] || paths[cur].closed)) cur = null;
   sel = { p: cur ?? -1, n: -1 };
@@ -439,7 +463,7 @@ function lsSet(k, v) {
 }
 const docIndex = () => lsGet(K_INDEX) || [];
 const newDocId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const docData = () => ({ name: docName, paths, texts, doc, flip, sketchOp: +$('opacity').value, skRect, skHidden, skLocked });
+const docData = () => ({ name: docName, paths, texts, boards, ab, flip, sketchOp: +$('opacity').value, skRect, skHidden, skLocked });
 function save() {
   lsSet(K_PREFS, style);
   if (!docId) return;
@@ -454,21 +478,25 @@ function load() {
   if (migrate) {
     style = { ...style, ...(old.style || {}) };
     const id = newDocId();
-    lsSet(K_DOC(id), { name: 'Untitled', paths: old.paths || [], texts: old.texts || [], doc: old.doc || doc });
+    lsSet(K_DOC(id), { name: 'Untitled', paths: old.paths || [], texts: old.texts || [], doc: old.doc });
     lsSet(K_INDEX, [{ id, name: 'Untitled', updated: Date.now() }]);
     lsSet(K_CUR, id);
   }
   let id = localStorage.getItem(K_CUR);
   try { id = JSON.parse(id); } catch (e) {}
   if (!id || !lsGet(K_DOC(id))) id = docIndex()[0]?.id;
-  if (!id || !lsGet(K_DOC(id))) { id = newDocId(); lsSet(K_DOC(id), { name: 'Untitled', paths: [], texts: [], doc }); }
+  if (!id || !lsGet(K_DOC(id))) { id = newDocId(); lsSet(K_DOC(id), { name: 'Untitled', paths: [], texts: [] }); }
   docId = id;
   applyDocData(lsGet(K_DOC(id)));
   if (migrate) save();
   $('color').value = style.color; $('width').value = style.width;
 }
 function applyDocData(d) {
-  paths = d.paths || []; texts = d.texts || []; doc = d.doc || { w: 1000, h: 750 };
+  paths = d.paths || []; texts = d.texts || [];
+  // Drawings from before artboards had one canvas (`doc`); it becomes the first artboard.
+  boards = Array.isArray(d.boards) && d.boards.length ? d.boards
+    : [{ name: 'Artboard 1', x: 0, y: 0, w: (d.doc && d.doc.w) || 1000, h: (d.doc && d.doc.h) || 750 }];
+  ab = Math.max(0, Math.min(d.ab | 0, boards.length - 1));
   flip = d.flip || { h: false, v: false }; docName = d.name || 'Untitled';
   skRect = d.skRect || { x: 0, y: 0, w: 0, h: 0 }; skHidden = !!d.skHidden; skLocked = d.skLocked !== false; sketchSel = false;
   cur = null; sel = { p: -1, n: -1 }; extra = []; selT = -1; extraT = []; undoStack = []; redoStack = [];
@@ -815,12 +843,18 @@ function reversePath(p) {
 
 /* ---------- view ---------- */
 function applyView() { world.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`); placeEditor(); updateGrid(); }
-function fit() {
-  const r = stage.getBoundingClientRect();
-  const k = Math.min(r.width / doc.w, r.height / doc.h) * 0.92;
-  view = { k, x: (r.width - doc.w * k) / 2, y: (r.height - doc.h * k) / 2 };
+// Fit the current artboard (or a given box) in the window.
+function fit(box) {
+  const b = box || B(), r = stage.getBoundingClientRect();
+  const k = Math.min(r.width / b.w, r.height / b.h) * (box ? 0.88 : 0.92);
+  view = { k, x: (r.width - b.w * k) / 2 - b.x * k, y: (r.height - b.h * k) / 2 - b.y * k };
   applyView(); render();
 }
+function boardsBox() {
+  const x0 = Math.min(...boards.map(b => b.x)), y0 = Math.min(...boards.map(b => b.y));
+  return { x: x0, y: y0, w: Math.max(...boards.map(b => b.x + b.w)) - x0, h: Math.max(...boards.map(b => b.y + b.h)) - y0 };
+}
+const fitAll = () => fit(boardsBox());
 function zoomAt(mx, my, factor) {
   const nk = Math.min(40, Math.max(0.05, view.k * factor));
   view.x = mx - (mx - view.x) * (nk / view.k);
@@ -831,17 +865,29 @@ function toDoc(e) {
   const r = svg.getBoundingClientRect();
   return { x: (e.clientX - r.left - view.x) / view.k, y: (e.clientY - r.top - view.y) / view.k };
 }
-function setDoc(w, h) {
-  doc = { w, h };
-  board.setAttribute('width', w); board.setAttribute('height', h);
-  $('docw').value = w; $('doch').value = h;
-  applyFlip(); updateGrid();
+// Redraw the artboard backgrounds and grids, and update the size boxes and the Artboards menu.
+function syncBoards() {
+  const bs = boards.map((b, i) => `<rect class="board${i === ab && boards.length > 1 ? ' on' : ''}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}"/>`).join('');
+  $('boards').innerHTML = bs;
+  $('grid').innerHTML = boards.map(b => `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="url(#gridpat)"/>`).join('');
+  $('docw').value = B().w; $('doch').value = B().h;
+  $('ab-list').innerHTML = boards.map((b, i) => `<button class="mi${i === ab ? ' on' : ''}" data-ab="${i}">${esc(b.name)} <span class="sc">${b.w} × ${b.h}</span></button>`).join('');
+  $('ab-del').disabled = boards.length < 2;
+  updateGrid();
 }
-// Resize the canvas from the W × H boxes. Content stays where it is (anchored top-left).
+// Kept for older callers: resize the current artboard.
+function setDoc(w, h) { Object.assign(B(), { w, h }); syncBoards(); applyFlip(); }
+function setBoard(i) { if (i === ab || !boards[i]) return; ab = i; syncBoards(); render(); save(); }
+// Index of the artboard under a point (the front-most, i.e. last, wins), or -1.
+function boardAt(q) {
+  for (let i = boards.length - 1; i >= 0; i--) { const b = boards[i]; if (q.x >= b.x && q.x <= b.x + b.w && q.y >= b.y && q.y <= b.y + b.h) return i; }
+  return -1;
+}
+// Resize the current artboard from the W × H boxes. Content stays where it is (anchored top-left).
 function resizeCanvas() {
   const w = Math.round(+$('docw').value), h = Math.round(+$('doch').value);
-  if (!(w >= 1 && h >= 1 && w <= 20000 && h <= 20000)) { $('docw').value = doc.w; $('doch').value = doc.h; return; }
-  if (w === doc.w && h === doc.h) return;
+  if (!(w >= 1 && h >= 1 && w <= 20000 && h <= 20000)) { $('docw').value = B().w; $('doch').value = B().h; return; }
+  if (w === B().w && h === B().h) return;
   snap(); setDoc(w, h); fit(); save();
 }
 let flip = { h: false, v: false };
@@ -970,6 +1016,10 @@ function render() {
     const m = drag;
     o += `<rect class="marquee" x="${Math.min(m.a.x, m.b.x)}" y="${Math.min(m.a.y, m.b.y)}" width="${Math.abs(m.b.x - m.a.x)}" height="${Math.abs(m.b.y - m.a.y)}" stroke-width="${1 / k}"/>`;
   }
+  // Artboard names sit just above each board, at a constant on-screen size.
+  if (boards.length > 1 || boards[0].name !== 'Artboard 1') boards.forEach((b, i) => {
+    o += `<text class="ablabel${i === ab ? ' on' : ''}" data-b="${i}" x="${b.x}" y="${b.y - 6 / k}" font-size="${12 / k}">${esc(b.name)}</text>`;
+  });
   overlayG.innerHTML = o;
   $('empty').style.display = (hasImage || paths.length || texts.length || editT) ? 'none' : '';
 }
@@ -977,13 +1027,13 @@ function render() {
 /* ---------- tools ---------- */
 const hints = {
   pen: 'Click to place a corner point; click and drag to pull out curve handles. Click the first point to close the shape. <kbd>Enter</kbd> or <kbd>Esc</kbd> finishes the path. Click on an existing path to add a point to it, or click an open path’s end to keep drawing it.',
-  edit: 'Drag items to move them; drag empty space to box-select (<kbd>Shift</kbd> adds), <kbd>⌘</kbd><kbd>A</kbd> for all. Drag box corners to scale, the round handle to rotate. Drag points or handles to reshape; double-click a point for smooth/corner, or a path to add a point. <kbd>⌘</kbd><kbd>D</kbd> duplicates, <kbd>Alt</kbd>-drag copies, <kbd>⌘</kbd><kbd>G</kbd> groups, arrows nudge, <kbd>[</kbd> <kbd>]</kbd> restack. More in the Object menu.',
+  edit: 'Drag items, or anywhere inside the selection box, to move them; drag empty space to box-select (<kbd>Shift</kbd> adds), <kbd>⌘</kbd><kbd>A</kbd> for all. Drag box corners to scale, the round handle to rotate. Drag points or handles to reshape; double-click a point for smooth/corner, or a path to add a point. <kbd>⌘</kbd><kbd>D</kbd> duplicates, <kbd>Alt</kbd>-drag copies, <kbd>⌘</kbd><kbd>G</kbd> groups, arrows nudge, <kbd>[</kbd> <kbd>]</kbd> restack. More in the Object menu.',
   rect: 'Drag from corner to corner to draw a rectangle. Hold <kbd>Shift</kbd> for a square, <kbd>Alt</kbd> to draw from the center. Round its corners with Corners in the style bar. It’s a regular path, so you can reshape it in Edit mode.',
   polygon: 'Drag from the center outward to draw a polygon; the first corner follows the pointer. <kbd>Shift</kbd> snaps the angle. Set the number of sides in the style bar.',
   star: 'Drag from the center outward to draw a star; the first point follows the pointer. <kbd>Shift</kbd> snaps the angle. Set the points and inner radius in the style bar.',
   line: 'Drag to draw a straight line. <kbd>Shift</kbd> locks it to 45° steps.',
   circle: 'Drag from the center outward to draw a circle. It’s a regular Bézier path, so you can reshape it in Edit mode.',
-  text: 'Click to add text, or click existing text to change it. <kbd>Enter</kbd> places it, <kbd>Shift</kbd>+<kbd>Enter</kbd> starts a new line, <kbd>Esc</kbd> cancels. <kbd>⌘</kbd>+<kbd>B</kbd> / <kbd>⌘</kbd>+<kbd>I</kbd> for bold / italic. Object › Convert text to shapes turns text into editable letter shapes. The color comes from Fill and the size from Size. In Edit mode, drag text to move it and double-click to retype it.',
+  text: 'Click to add text, or click existing text to change it; drag existing text to move it. <kbd>Enter</kbd> places it, <kbd>Shift</kbd>+<kbd>Enter</kbd> starts a new line, <kbd>Esc</kbd> cancels. <kbd>⌘</kbd>+<kbd>B</kbd> / <kbd>⌘</kbd>+<kbd>I</kbd> for bold / italic. Object › Convert text to shapes turns text into editable letter shapes. The color comes from Fill and the size from Size. In Edit mode, drag text to move it and double-click to retype it.',
   pan: 'Drag to move around. Scroll to zoom. Hold <kbd>Space</kbd> in any tool to pan.'
 };
 function setTool(t) {
@@ -1272,6 +1322,18 @@ function editDown(pt, e) {
     }
   }
   const ti = hitText(e);
+  const hp = (e.target.dataset && e.target.dataset.p !== undefined) ? +e.target.dataset.p : -1;
+  // Pressing anywhere inside the selection box drags the whole selection. The selected path's own
+  // points and handles still win, and a click that doesn't move selects whatever is under the pointer.
+  if (box && !e.shiftKey && pt.x >= box.x0 - hr && pt.x <= box.x1 + hr && pt.y >= box.y0 - hr && pt.y <= box.y1 + hr) {
+    const ap = sel.p >= 0 && paths[sel.p] && !paths[sel.p].hidden && !paths[sel.p].locked ? paths[sel.p].nodes : [];
+    const onPoint = ap.some(n => dist(pt, n) < hr || (n.hi && dist(pt, n.hi) < hr) || (n.ho && dist(pt, n.ho) < hr));
+    if (!onPoint) {
+      // A click without dragging selects just the item under the pointer (or nothing, on empty space).
+      const clickSel = ti >= 0 ? expandSel([], [ti]) : hp >= 0 ? expandSel([hp], []) : [[], []];
+      startMove(pt, e, { clickSel }); return;
+    }
+  }
   if (ti >= 0) {
     const [ups, uts] = expandSel([], [ti]);
     if (e.shiftKey) { toggleUnit(ups, uts); render(); return; }
@@ -1281,7 +1343,6 @@ function editDown(pt, e) {
     startMove(pt, e); return;
   }
   // Pressing on a path that's already part of a multi-selection drags the whole group.
-  const hp = (e.target.dataset && e.target.dataset.p !== undefined) ? +e.target.dataset.p : -1;
   const keepGroup = hp >= 0 && !e.shiftKey && sel.n < 0 && selectedPaths().includes(hp);
   if (!e.shiftKey && !keepGroup) { extra = []; selT = -1; extraT = []; }
   if (sel.p >= 0 && paths[sel.p] && !paths[sel.p].hidden) {
@@ -1329,12 +1390,13 @@ function editDown(pt, e) {
   render();
 }
 // Start dragging the selection. With Alt held, drag a copy and leave the original in place (one undo step).
-function startMove(pt, e) {
-  const pre = state();
+// opts.clickSel: what to select instead if the press turns out to be a click; opts.editOnClick: a text to open for typing.
+function startMove(pt, e, opts) {
+  const pre = state(), click = opts && (opts.clickSel || opts.editOnClick != null);
   if (e.altKey) pasteData(copyData(), 0, 0, true);
   const refs = selectedRefs();
   drag = { type: 'move', list: selectedPaths(), tlist: selectedTexts(), start: pt, applied: { x: 0, y: 0 }, pre, dup: e.altKey,
-    box: refsBox(refs), T: snapTargets(refs) };
+    box: refsBox(refs), T: snapTargets(refs), slop: click ? { x: e.clientX, y: e.clientY } : null, ...(opts || {}) };
   render();
 }
 // Select every path with part of its outline inside the box, and every text the box touches.
@@ -1354,7 +1416,7 @@ function snapTargets(exclude) {
   const ex = new Set(exclude || []), xs = [], ys = [];
   if (style.snap === false) return { xs, ys };
   const add = b => { xs.push(b.x0, (b.x0 + b.x1) / 2, b.x1); ys.push(b.y0, (b.y0 + b.y1) / 2, b.y1); };
-  add({ x0: 0, y0: 0, x1: doc.w, y1: doc.h });
+  boards.forEach(b => add({ x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.h }));
   paths.forEach((p, i) => { if (!p.hidden && !ex.has(p) && p.nodes.length > 1) add(boundsOf([i])); });
   texts.forEach((t, i) => { if (t.hidden || ex.has(t)) return; const b = textBox(i); if (b) add({ x0: b.x, y0: b.y, x1: b.x + b.width, y1: b.y + b.height }); });
   return { xs, ys };
@@ -1392,7 +1454,6 @@ function snapDelta(box, dx, dy, T, e) {
 // Draw the grid, thinning it out when zoomed far out so lines stay at least 8px apart.
 function updateGrid() {
   const g = $('grid'); if (!g) return;
-  g.setAttribute('width', doc.w); g.setAttribute('height', doc.h);
   g.setAttribute('visibility', style.grid ? 'visible' : 'hidden');
   let step = gridStep(); while (step * view.k < 8) step *= 2;
   const pat = $('gridpat'); pat.setAttribute('width', step); pat.setAttribute('height', step);
@@ -1512,9 +1573,24 @@ svg.addEventListener('pointerdown', e => {
     drag = { type: 'pan', sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y }; e.preventDefault(); return;
   }
   if (e.button !== 0) return;
+  const bl = e.target.dataset && e.target.dataset.b;
+  if (bl !== undefined) {
+    e.preventDefault(); commitText(); finishPath();
+    const now = performance.now(), dbl = now - lastTap.t < 400 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 6;
+    lastTap = dbl ? { t: 0, x: 0, y: 0 } : { t: now, x: e.clientX, y: e.clientY };
+    if (dbl) { drag = null; renameBoard(+bl); return; }
+    startBoardDrag(+bl, pt, e); return;
+  }
+  { const bi = boardAt(pt); if (bi >= 0 && bi !== ab) { ab = bi; syncBoards(); save(); } }
   if (tool === 'text') {
     e.preventDefault(); // keep focus in the text box we're about to open
     const ti = hitText(e);
+    // Pressing on text: drag to move it (and anything selected with it); a plain click opens it for typing.
+    if (ti >= 0 && !editT && !texts[ti].locked) {
+      const [ups, uts] = expandSel([], [ti]);
+      if (!selectedTexts().includes(ti)) setSelection(ups, uts);
+      startMove(pt, e, { editOnClick: ti }); return;
+    }
     startTextEdit(ti, pt); return;
   }
   if (tool === 'edit') {
@@ -1540,6 +1616,8 @@ svg.addEventListener('pointerdown', e => {
 svg.addEventListener('pointermove', e => {
   let pt = toDoc(e); hover = pt;
   if (!drag) { if (tool === 'pen') render(); return; }
+  // Some presses only turn into a drag once the pointer has moved a few pixels; until then they're a click.
+  if (drag.slop) { if (Math.hypot(e.clientX - drag.slop.x, e.clientY - drag.slop.y) < 4) return; drag.slop = null; }
   if (drag.pre && !drag.moved) { pushUndo(drag.pre); drag.moved = true; if (drag.type === 'anchor' || drag.type === 'handle') touched(paths[sel.p]); }
   const n = drag.node;
   switch (drag.type) {
@@ -1592,6 +1670,7 @@ svg.addEventListener('pointermove', e => {
     }
     case 'marquee':
       drag.b = pt; marqueeSelect(drag); render(); break;
+    case 'board': moveBoard(pt, e); break;
     case 'sketch':
       skRect = { ...drag.orig, x: drag.orig.x + pt.x - drag.start.x, y: drag.orig.y + pt.y - drag.start.y };
       applyFlip(); render(); break;
@@ -1645,11 +1724,16 @@ svg.addEventListener('pointermove', e => {
 function endDrag() {
   if (!drag) return;
   const d = drag, wasEdit = d.type !== 'pan' && d.type !== 'marquee'; drag = null;
+  if (d.type === 'board' && !d.moved) { render(); save(); return; }
   // A pen click that wobbled a few pixels shouldn't leave invisible stub handles behind.
   if (d.type === 'circle' && !(d.r > 2 / view.k)) { removePath(d.p); undoStack.pop(); }
   if (d.type === 'rect' && !(d.w > 2 / view.k && d.h > 2 / view.k)) { removePath(d.p); undoStack.pop(); }
   if (d.type === 'shape' && !(d.size > 2 / view.k)) { removePath(d.p); undoStack.pop(); }
   if (d.dup && !d.moved) { restore(d.pre); return; } // Alt-click without dragging: drop the copy
+  if (d.type === 'move' && !d.moved) {
+    if (d.editOnClick != null) { startTextEdit(d.editOnClick); return; }
+    if (d.clickSel) setSelection(...d.clickSel);
+  }
   if (d.type === 'newnode' && d.node.ho && dist(d.node.ho, d.node) < 4 / view.k) { d.node.hi = d.node.ho = null; }
   if (wasEdit) save(); render();
 }
@@ -1731,6 +1815,7 @@ window.addEventListener('keydown', e => {
     case '}': arrange('front'); break;   // Shift+]
     case '{': arrange('back'); break;    // Shift+[
     case '0': fit(); break;
+    case ')': fitAll(); break;   // Shift+0
     case '+': case '=': zoomCenter(1.25); break;
     case '-': zoomCenter(0.8); break;
   }
@@ -1743,7 +1828,7 @@ function zoomCenter(fct) { const r = svg.getBoundingClientRect(); zoomAt(r.width
 let sketch = null;   // { url, w, h } of the current sketch image
 function showSketch(sk) {
   sketch = sk;
-  if (sk) { img.setAttribute('href', sk.url); if (!(skRect.w > 0)) skRect = { x: 0, y: 0, w: sk.w, h: sk.h }; }
+  if (sk) { img.setAttribute('href', sk.url); if (!(skRect.w > 0)) skRect = { x: B().x, y: B().y, w: sk.w, h: sk.h }; }
   else { img.removeAttribute('href'); sketchSel = false; }
   hasImage = !!sk; $('clear-sketch').disabled = !sk; $('sk-trace').disabled = !sk;
   applyFlip(); render();
@@ -1755,9 +1840,9 @@ function loadImage(file) {
     const im = new Image();
     im.onload = () => {
       // The sketch keeps its own size; the canvas starts out matching it.
-      if (im.naturalWidth !== doc.w || im.naturalHeight !== doc.h) snap();
+      if (im.naturalWidth !== B().w || im.naturalHeight !== B().h) snap();
       setDoc(im.naturalWidth, im.naturalHeight);
-      skRect = { x: 0, y: 0, w: im.naturalWidth, h: im.naturalHeight };
+      skRect = { x: B().x, y: B().y, w: im.naturalWidth, h: im.naturalHeight };
       showSketch({ url: reader.result, w: im.naturalWidth, h: im.naturalHeight });
       idb.set(docId, sketch);
       fit(); save();
@@ -1995,6 +2080,7 @@ async function importSVG(file) {
       if (it.p) { paths.push(r); added.push(paths.length - 1); }
       else { texts.push(r); addedT.push(texts.length - 1); }
     });
+    if (B().x || B().y) moveRefs([...added.map(i => paths[i]), ...addedT.map(i => texts[i])], B().x, B().y);
     normStructure();
     setTool('edit');
     // Select the imported shapes so they can be moved or scaled right away.
@@ -2504,7 +2590,7 @@ function moveRefs(refs, dx, dy) {
 function alignSel(mode) {
   const units = selUnits().map(u => ({ u, b: refsBox(u) })).filter(x => x.b);
   if (!units.length) return;
-  const T = units.length === 1 ? { x0: 0, y0: 0, x1: doc.w, y1: doc.h }
+  const T = units.length === 1 ? { x0: B().x, y0: B().y, x1: B().x + B().w, y1: B().y + B().h }
     : units.reduce((a, { b }) => ({ x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
   commitText(); snap();
   units.forEach(({ u, b }) => {
@@ -2621,13 +2707,15 @@ function setSketchShown(on) { skHidden = !on; if (skHidden) sketchSel = false; a
 function setSketchLocked(on) { skLocked = on; if (on) sketchSel = false; applyFlip(); render(); save(); }
 $('sk-show').onclick = () => setSketchShown(skHidden);
 $('sk-lock').onclick = () => setSketchLocked(!skLocked);
-$('sk-reset').onclick = () => { if (!sketch) return; snap(); skRect = { x: 0, y: 0, w: sketch.w, h: sketch.h }; applyFlip(); render(); save(); };
+$('sk-reset').onclick = () => { if (!sketch) return; snap(); skRect = { x: B().x, y: B().y, w: sketch.w, h: sketch.h }; applyFlip(); render(); save(); };
 // Mirror the sketch and every path together so they stay aligned.
 function flipAll(axis) {
   finishPath();
   snap();
-  const m = axis === 'h' ? (q => { q.x = doc.w - q.x; }) : (q => { q.y = doc.h - q.y; });
-  if (axis === 'h') skRect.x = doc.w - skRect.x - skRect.w; else skRect.y = doc.h - skRect.y - skRect.h;
+  // Mirror across the middle of the current artboard.
+  const b = B(), sx = 2 * b.x + b.w, sy = 2 * b.y + b.h;
+  const m = axis === 'h' ? (q => { q.x = sx - q.x; }) : (q => { q.y = sy - q.y; });
+  if (axis === 'h') skRect.x = sx - skRect.x - skRect.w; else skRect.y = sy - skRect.y - skRect.h;
   paths.forEach(p => p.nodes.forEach(n => { m(n); if (n.hi) m(n.hi); if (n.ho) m(n.ho); }));
   texts.forEach(t => { m(t); if (t.rot) t.rot = -t.rot; }); // text stays readable; only its position and tilt mirror
   flip[axis] = !flip[axis];
@@ -2751,10 +2839,15 @@ function svgPath(ref, pad) {
 function svgText(ref, pad) {
   return `${pad}<text x="${f(ref.x)}" y="${f(ref.y)}"${ref.rot ? ` transform="rotate(${f(ref.rot)} ${f(ref.x)} ${f(ref.y)})"` : ''} stroke="none"${textAttrs(ref)}${opAttr(ref)} fill="${ref.color}" text-anchor="middle" dominant-baseline="central">${textBody(ref)}</text>`;
 }
-function buildSVG(fontCSS) {
-  const lines = [], doneCp = new Set();
+// One artboard's file: only the items that overlap it (combined shapes count as one).
+function buildSVG(fontCSS, bi = ab) {
+  const b = boards[bi], lines = [], doneCp = new Set(), keep = new Set();
+  buildUnits(layerItems().filter(it => !it.ref.hidden).map(it => it.ref), 'cp').forEach(u => {
+    const r = unitBox(u);
+    if (r && r.x0 <= b.x + b.w && r.x1 >= b.x && r.y0 <= b.y + b.h && r.y1 >= b.y) u.forEach(x => keep.add(x));
+  });
   let openG = null;
-  layerItems().filter(it => !it.ref.hidden).forEach(({ k, ref }) => {
+  layerItems().filter(it => keep.has(it.ref)).forEach(({ k, ref }) => {
     if (ref.g !== openG) {
       if (openG != null) lines.push('    </g>');
       if (ref.g != null) lines.push(`    <g id="group-${ref.g}">`);
@@ -2767,7 +2860,7 @@ function buildSVG(fontCSS) {
     } else lines.push(svgText(ref, pad));
   });
   if (openG != null) lines.push('    </g>');
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${doc.w}" height="${doc.h}" viewBox="0 0 ${doc.w} ${doc.h}">\n` +
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${b.w}" height="${b.h}" viewBox="${b.x} ${b.y} ${b.w} ${b.h}">\n` +
     (fontCSS ? `  <defs><style>${fontCSS}</style></defs>\n` : '') +
     `  <g fill="none">\n` +
     lines.filter(Boolean).join('\n') + `\n  </g>\n</svg>\n`;
@@ -2942,6 +3035,102 @@ $('z-front').onclick = () => arrange('front');
 $('z-up').onclick = () => arrange('up');
 $('z-down').onclick = () => arrange('down');
 $('z-back').onclick = () => arrange('back');
+/* ---------- artboards ---------- */
+// A unit's box, counting hidden items too (hidden text has no box, so its anchor point stands in).
+function unitBox(u) {
+  let b = null;
+  const add = q => { b = b ? { x0: Math.min(b.x0, q.x0), y0: Math.min(b.y0, q.y0), x1: Math.max(b.x1, q.x1), y1: Math.max(b.y1, q.y1) } : q; };
+  u.forEach(r => {
+    if (r.nodes) { const i = paths.indexOf(r); if (r.nodes.length) add(boundsOf([i])); }
+    else { const i = texts.indexOf(r), tb = !r.hidden && textBox(i); add(tb ? { x0: tb.x, y0: tb.y, x1: tb.x + tb.width, y1: tb.y + tb.height } : { x0: r.x, y0: r.y, x1: r.x, y1: r.y }); }
+  });
+  return b;
+}
+// The artwork that belongs to an artboard: whole groups and combined shapes whose middle is on it.
+function boardUnits(i) {
+  return buildUnits(layerItems().map(it => it.ref), 'top').filter(u => {
+    const b = unitBox(u); return b && boardAt({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2 }) === i;
+  });
+}
+const boardRefs = i => boardUnits(i).flat();
+function uniqueBoardName(base) {
+  const names = new Set(boards.map(b => b.name));
+  let n = boards.length + 1; while (names.has(`${base} ${n}`)) n++;
+  return `${base} ${n}`;
+}
+// New boards go to the right of all the others, lined up with the current board's top.
+const GAP = 80;
+function nextBoardSpot() { const bb = boardsBox(); return { x: bb.x + bb.w + GAP, y: B().y }; }
+function addBoard(copy) {
+  commitText(); finishPath(); snap();
+  const src = B(), at = nextBoardSpot();
+  const nb = { name: copy ? copyBoardName(src.name + ' copy') : uniqueBoardName('Artboard'), x: at.x, y: at.y, w: src.w, h: src.h };
+  const data = copy ? (() => { const refs = boardRefs(ab); return refs.length ? JSON.parse(JSON.stringify({ paths: refs.filter(r => r.nodes), texts: refs.filter(r => !r.nodes) })) : null; })() : null;
+  boards.push(nb); ab = boards.length - 1; syncBoards();
+  if (data) pasteData(data, nb.x - src.x, nb.y - src.y, true); else setSelection([], []);
+  fit(); save();
+}
+function copyBoardName(base) {
+  const names = new Set(boards.map(b => b.name));
+  if (!names.has(base)) return base;
+  let n = 2; while (names.has(`${base} ${n}`)) n++;
+  return `${base} ${n}`;
+}
+function renameBoard(i = ab) {
+  const name = prompt('Name this artboard', boards[i].name);
+  if (name == null || !name.trim()) return;
+  snap(); boards[i].name = name.trim().slice(0, 80); syncBoards(); render(); save();
+}
+function deleteBoard() {
+  if (boards.length < 2) return;
+  const refs = boardRefs(ab);
+  if (refs.length && !confirm(`Delete “${B().name}” and the ${refs.length} item${refs.length > 1 ? 's' : ''} on it?`)) return;
+  commitText(); finishPath(); snap();
+  paths = paths.filter(p => !refs.includes(p)); texts = texts.filter(t => !refs.includes(t));
+  boards.splice(ab, 1); ab = Math.min(ab, boards.length - 1);
+  cur = null; setSelection([], []); normStructure(); syncBoards(); fit(); save();
+}
+function fitBoardToArt() {
+  const us = boardUnits(ab); if (!us.length) return;
+  const b = us.map(unitBox).reduce((a, c) => ({ x0: Math.min(a.x0, c.x0), y0: Math.min(a.y0, c.y0), x1: Math.max(a.x1, c.x1), y1: Math.max(a.y1, c.y1) }));
+  const x = Math.floor(b.x0), y = Math.floor(b.y0);
+  snap(); Object.assign(B(), { x, y, w: Math.max(1, Math.ceil(b.x1) - x), h: Math.max(1, Math.ceil(b.y1) - y) });
+  syncBoards(); fit(); save();
+}
+// Dragging an artboard's name moves the board with its artwork.
+function startBoardDrag(i, pt, e) {
+  if (i !== ab) { ab = i; syncBoards(); }
+  drag = { type: 'board', i, start: pt, orig: { x: boards[i].x, y: boards[i].y }, refs: boardRefs(i), applied: { x: 0, y: 0 },
+    pre: state(), slop: { x: e.clientX, y: e.clientY } };
+  render();
+}
+function moveBoard(pt, e) {
+  const d = drag, b = boards[d.i];
+  let dx = pt.x - d.start.x, dy = pt.y - d.start.y;
+  // Snap the board's edges to the other boards' edges.
+  if (style.snap !== false && !(e.metaKey || e.ctrlKey)) {
+    const tol = 8 / view.k, others = boards.filter((_, j) => j !== d.i);
+    const best = (vals, cands) => { let m = null; vals.forEach(v => cands.forEach(c => { const g = c - v; if (Math.abs(g) < tol && (m === null || Math.abs(g) < Math.abs(m))) m = g; })); return m; };
+    const nx = d.orig.x + dx, ny = d.orig.y + dy;
+    const gx = best([nx, nx + b.w], others.flatMap(o => [o.x, o.x + o.w, o.x - GAP, o.x + o.w + GAP]));
+    const gy = best([ny, ny + b.h], others.flatMap(o => [o.y, o.y + o.h]));
+    if (gx !== null) dx += gx; if (gy !== null) dy += gy;
+  }
+  dx = Math.round(d.orig.x + dx) - d.orig.x; dy = Math.round(d.orig.y + dy) - d.orig.y;
+  const mx = dx - d.applied.x, my = dy - d.applied.y;
+  d.applied = { x: dx, y: dy };
+  b.x = d.orig.x + dx; b.y = d.orig.y + dy;
+  moveRefs(d.refs, mx, my);
+  syncBoards(); render();
+}
+$('ab-new').onclick = () => { closeMenus(); addBoard(false); };
+$('ab-dup').onclick = () => { closeMenus(); addBoard(true); };
+$('ab-rename').onclick = () => { closeMenus(); renameBoard(); };
+$('ab-del').onclick = () => { closeMenus(); deleteBoard(); };
+$('ab-fit-art').onclick = () => { closeMenus(); fitBoardToArt(); };
+$('ab-all').onclick = () => { closeMenus(); fitAll(); };
+$('ab-list').onclick = e => { const bt = e.target.closest('[data-ab]'); if (!bt) return; closeMenus(); ab = +bt.dataset.ab; syncBoards(); fit(); save(); };
+
 /* ---------- drawings ---------- */
 function openDoc(id) {
   const d = lsGet(K_DOC(id)); if (!d) return;
@@ -2949,7 +3138,7 @@ function openDoc(id) {
   docId = id; applyDocData(d); lsSet(K_CUR, id);
   showSketch(null);
   idb.get(id).then(sk => { if (sk && docId === id) showSketch(sk); });
-  setDoc(doc.w, doc.h); applyFlip(); fit(); save();
+  syncBoards(); applyFlip(); fit(); save();
 }
 function uniqueName(base) {
   const names = new Set(docIndex().map(d => d.name));
@@ -2960,7 +3149,7 @@ function uniqueName(base) {
 function newDoc(data, name, sk) {
   save();
   const id = newDocId(), nm = uniqueName(name || 'Untitled');
-  lsSet(K_DOC(id), { paths: [], texts: [], doc: { w: doc.w, h: doc.h }, ...data, name: nm });
+  lsSet(K_DOC(id), { paths: [], texts: [], boards: [{ name: 'Artboard 1', x: 0, y: 0, w: B().w, h: B().h }], ab: 0, ...data, name: nm });
   lsSet(K_INDEX, [{ id, name: nm, updated: Date.now() }, ...docIndex()]);
   if (sk) idb.set(id, sk);
   openDoc(id);
@@ -3038,7 +3227,11 @@ $('projfile').addEventListener('change', async e => {
 });
 
 /* ---------- export ---------- */
-const exportName = () => (docName || 'drawing').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'drawing';
+const safeName = n => n.replace(/[\\/:*?"<>|]+/g, '-').trim();
+const exportName = () => safeName(docName || 'drawing') || 'drawing';
+// With several artboards, each file is named after the drawing and the board.
+const boardFileName = bi => boards.length > 1 ? `${exportName()} - ${safeName(boards[bi].name) || 'Artboard ' + (bi + 1)}` : exportName();
+let exBoard = 0;   // the artboard shown in the export dialog
 // Which fonts the visible text uses: family -> { chars, faces: Set('400n', '700i', …) }.
 function usedFonts() {
   const m = new Map();
@@ -3116,12 +3309,12 @@ async function embeddedFonts() {
 let exportSeq = 0;
 async function refreshSVG() {
   const seq = ++exportSeq, embed = $('embed').checked && usedFonts().size;
-  $('out').value = buildSVG();
+  $('out').value = buildSVG('', exBoard);
   $('font-note').textContent = embed ? 'Embedding fonts…' : (usedFonts().size ? 'Text uses fonts by name; they show correctly only where installed.' : '');
   if (!embed) return;
   const fc = await embeddedFonts();
   if (seq !== exportSeq) return;
-  $('out').value = buildSVG(fc.css);
+  $('out').value = buildSVG(fc.css, exBoard);
   const parts = [];
   if (fc.embedded.length) parts.push('Embedded: ' + fc.embedded.join(', ') + '.');
   if (fc.missing.length) parts.push('Couldn’t embed ' + fc.missing.join(', ') + ' (shows only where installed' + (canQueryFonts ? '; allow font access via the font menu’s “More system fonts…” to embed installed fonts' : '') + ').');
@@ -3129,10 +3322,25 @@ async function refreshSVG() {
 }
 // PNG: draw the SVG (always with fonts embedded when possible, since images can't load web fonts) onto a canvas.
 const MAX_SIDE = 16384, MAX_PIXELS = 120e6;
-function pngScale() {
+function pngScale(bi = exBoard) {
+  const b = boards[bi];
   let k = +$('png-scale').value || 1;
-  k = Math.min(k, MAX_SIDE / doc.w, MAX_SIDE / doc.h, Math.sqrt(MAX_PIXELS / (doc.w * doc.h)));
+  k = Math.min(k, MAX_SIDE / b.w, MAX_SIDE / b.h, Math.sqrt(MAX_PIXELS / (b.w * b.h)));
   return Math.max(0.01, k);
+}
+// Draw one artboard's SVG onto a canvas and return it as a PNG blob.
+async function renderPNG(bi, css) {
+  const b = boards[bi], k = pngScale(bi), w = Math.round(b.w * k), h = Math.round(b.h * k);
+  const url = URL.createObjectURL(new Blob([buildSVG(css, bi)], { type: 'image/svg+xml' }));
+  try {
+    const im = new Image();
+    await new Promise((res, rej) => { im.onload = res; im.onerror = () => rej(new Error('render')); im.src = url; });
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    if (!$('png-transparent').checked) { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h); }
+    ctx.drawImage(im, 0, 0, w, h);
+    return await new Promise(res => c.toBlob(res, 'image/png'));
+  } finally { URL.revokeObjectURL(url); }
 }
 let pngURL = null;
 async function refreshPNG() {
@@ -3141,17 +3349,10 @@ async function refreshPNG() {
   $('png-note').textContent = 'Rendering…';
   const fc = usedFonts().size ? await embeddedFonts() : { css: '', missing: [] };
   if (seq !== exportSeq) return;
-  const k = pngScale(), w = Math.round(doc.w * k), h = Math.round(doc.h * k);
+  const b = boards[exBoard], k = pngScale(), w = Math.round(b.w * k), h = Math.round(b.h * k);
   $('png-size').textContent = `${w} × ${h} px` + (k < +$('png-scale').value ? ' (reduced to stay within browser limits)' : '');
-  const url = URL.createObjectURL(new Blob([buildSVG(fc.css)], { type: 'image/svg+xml' }));
   try {
-    const im = new Image();
-    await new Promise((res, rej) => { im.onload = res; im.onerror = () => rej(new Error('render')); im.src = url; });
-    const c = document.createElement('canvas'); c.width = w; c.height = h;
-    const ctx = c.getContext('2d');
-    if (!$('png-transparent').checked) { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h); }
-    ctx.drawImage(im, 0, 0, w, h);
-    const blob = await new Promise(res => c.toBlob(res, 'image/png'));
+    const blob = await renderPNG(exBoard, fc.css);
     if (seq !== exportSeq) return;
     if (pngURL) URL.revokeObjectURL(pngURL);
     pngURL = URL.createObjectURL(blob);
@@ -3160,7 +3361,7 @@ async function refreshPNG() {
     $('png-note').textContent = fc.missing.length ? 'Couldn’t embed ' + fc.missing.join(', ') + '; the PNG uses them only if they’re installed here.' : '';
   } catch (e) {
     $('png-note').textContent = 'Couldn’t render the PNG: ' + e.message;
-  } finally { URL.revokeObjectURL(url); }
+  }
 }
 function showTab(which) {
   $('tab-svg').setAttribute('aria-selected', String(which === 'svg'));
@@ -3176,6 +3377,10 @@ function download(url, name) {
 }
 $('export').onclick = () => {
   commitText(); finishPath(); closeMenus();
+  exBoard = ab;
+  $('ex-board').innerHTML = boards.map((b, i) => `<option value="${i}"${i === ab ? ' selected' : ''}>${esc(b.name)} (${b.w} × ${b.h})</option>`).join('');
+  $('ex-board-row').hidden = boards.length < 2;
+  document.querySelectorAll('.ex-all').forEach(bt => { bt.hidden = boards.length < 2; bt.disabled = false; });
   $('copy').textContent = 'Copy SVG';
   $('dlg').showModal();
   showTab(style.exportTab === 'png' ? 'png' : 'svg');
@@ -3183,15 +3388,36 @@ $('export').onclick = () => {
 $('tab-svg').onclick = () => showTab('svg');
 $('tab-png').onclick = () => showTab('png');
 $('embed').onchange = refreshSVG;
+$('ex-board').onchange = e => { exBoard = +e.target.value; showTab($('tab-png').getAttribute('aria-selected') === 'true' ? 'png' : 'svg'); };
+// Several downloads in a row: a short pause between them keeps browsers from dropping any.
+const pause = ms => new Promise(r => setTimeout(r, ms));
+async function downloadAll(kind, btn) {
+  btn.disabled = true; const label = btn.textContent;
+  try {
+    const embed = kind === 'png' || $('embed').checked;
+    const css = embed && usedFonts().size ? (await embeddedFonts()).css : '';
+    for (let i = 0; i < boards.length; i++) {
+      btn.textContent = `Saving ${i + 1} of ${boards.length}…`;
+      const blob = kind === 'png' ? await renderPNG(i, css) : new Blob([buildSVG(css, i)], { type: 'image/svg+xml' });
+      const url = URL.createObjectURL(blob);
+      download(url, boardFileName(i) + '.' + kind);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      await pause(300);
+    }
+  } catch (e) { alert('Couldn’t save every artboard: ' + e.message); }
+  finally { btn.textContent = label; btn.disabled = false; }
+}
+$('download-all').onclick = e => downloadAll('svg', e.currentTarget);
+$('download-all-png').onclick = e => downloadAll('png', e.currentTarget);
 $('png-scale').onchange = refreshPNG;
 $('png-transparent').onchange = refreshPNG;
 $('close').onclick = $('close-png').onclick = () => $('dlg').close();
 $('download').onclick = () => {
   const url = URL.createObjectURL(new Blob([$('out').value], { type: 'image/svg+xml' }));
-  download(url, exportName() + '.svg');
+  download(url, boardFileName(exBoard) + '.svg');
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
-$('download-png').onclick = () => { if (pngURL) download(pngURL, exportName() + '.png'); };
+$('download-png').onclick = () => { if (pngURL) download(pngURL, boardFileName(exBoard) + '.png'); };
 $('copy').onclick = async () => {
   const ta = $('out');
   try { await navigator.clipboard.writeText(ta.value); }
@@ -3203,7 +3429,7 @@ window.addEventListener('resize', () => { applyView(); });
 
 /* ---------- start ---------- */
 load();
-setDoc(doc.w, doc.h);
+syncBoards();
 applyFlip();
 idb.get(docId).then(sk => { if (sk) showSketch(sk); });
 setTool('pen');
